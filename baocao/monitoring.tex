@@ -1,0 +1,401 @@
+% -----------------------------------------------------------------
+% 7.1 Monitoring
+%
+% Văn phong: Kỹ sư MLOps - tập trung vào observability, metrics, alerting
+% Tổ chức: System Metrics → Data Metrics → Alerting → Decision Framework
+
+\textit{Monitoring là thành phần không thể thiếu trong vòng đời vận hành hệ thống gợi ý.
+Bên cạnh việc đảm bảo \textbf{service availability} và \textbf{performance SLA},
+monitoring còn đóng vai trò then chốt trong việc phát hiện \textbf{data drift} ---
+hiện tượng phân phối dữ liệu thay đổi theo thời gian khiến mô hình mất hiệu quả.
+Phần này trình bày chi tiết các chỉ số giám sát và cơ chế cảnh báo, được implement trong
+\texttt{alerting.py}, \texttt{automation/drift\_detection.py}, và \texttt{service/dashboard.py}.}
+
+% ===================================================================
+\subsubsection*{System Metrics: Giám sát hiệu năng dịch vụ}
+% ===================================================================
+
+System metrics đo lường trực tiếp hành vi của service ở mức infrastructure,
+cho phép phát hiện sớm các vấn đề về tải, lỗi, và tắc nghẽn.
+
+\paragraph{Latency Quantiles.}
+
+Độ trễ phản hồi được theo dõi qua các quantile:
+\begin{itemize}
+  \item \textbf{P50} (median): Latency ``điển hình'' mà người dùng trải nghiệm.
+  \item \textbf{P90}: 90\% requests hoàn thành nhanh hơn giá trị này.
+  \item \textbf{P95}: Chỉ số SLA chính --- target $< 100$ms.
+  \item \textbf{P99}: Phát hiện ``tail latency'' bất thường.
+\end{itemize}
+
+Công thức tính percentile $P_k$ từ tập quan sát $\{x_1, \dots, x_n\}$ (đã sắp xếp):
+\[
+  P_k = x_{\lceil k \cdot n / 100 \rceil}
+\]
+
+Ngưỡng cảnh báo được cấu hình trong \texttt{config/alerts\_config.yaml}:
+
+\begin{center}
+\begin{tabular}{|l|c|c|c|}
+\hline
+\textbf{Metric} & \textbf{Warning} & \textbf{Critical} & \textbf{Window} \\
+\hline
+\texttt{avg\_latency\_ms} & $> 200$ms & $> 400$ms & 5 min \\
+\texttt{p95\_latency\_ms} & --- & $> 500$ms & 5 min \\
+\hline
+\end{tabular}
+\end{center}
+
+\paragraph{Error Rate.}
+
+Tỷ lệ lỗi được định nghĩa là phần trăm requests trả về HTTP 4xx/5xx:
+\[
+  \text{Error Rate} = \frac{|\{r : r.\text{status} \geq 400\}|}{|\text{total requests}|}
+\]
+
+Ngưỡng:
+\begin{itemize}
+  \item \textbf{Warning}: Error rate $> 1\%$ trong cửa sổ 5 phút.
+  \item \textbf{Critical}: Error rate $> 5\%$ --- trigger incident response.
+\end{itemize}
+
+\paragraph{Fallback Rate.}
+
+Tỷ lệ requests được xử lý bởi fallback path (content-based thay vì CF):
+\[
+  \text{Fallback Rate} = \frac{|\{r : r.\text{fallback} = \text{true}\}|}{|\text{total requests}|}
+\]
+
+Với thiết kế hệ thống (91.4\% cold-start users), fallback rate kỳ vọng $\approx 91\%$.
+Nếu fallback rate $> 95\%$ --- có thể CF model bị lỗi hoặc mapping không đồng bộ.
+
+\paragraph{Throughput.}
+
+Số requests được xử lý mỗi phút (\texttt{requests\_per\_minute}):
+\begin{itemize}
+  \item \textbf{Target}: $\geq 100$ req/s (6,000 req/min).
+  \item \textbf{Alert}: $< 50$ req/s trong giờ cao điểm.
+  \item \textbf{Low traffic}: 0 requests trong 5 phút --- kiểm tra upstream.
+\end{itemize}
+
+% ===================================================================
+\subsubsection*{Data Metrics: Phát hiện trôi dạt dữ liệu (Data Drift)}
+% ===================================================================
+
+Data drift là hiện tượng phân phối dữ liệu thay đổi theo thời gian, khiến mô hình
+được huấn luyện trên dữ liệu cũ trở nên kém hiệu quả trên dữ liệu mới.
+Hệ thống giám sát 4 loại drift chính.
+
+\paragraph{Rating Distribution Drift.}
+
+Hệ thống so sánh phân phối rating giữa dữ liệu lịch sử (baseline) và dữ liệu hiện tại.
+Từ \texttt{drift\_detection.py}, sử dụng tổng hiệu phân phối:
+\[
+  \text{total\_diff} = \sum_{r=1}^{5} |P_{\text{current}}(r) - P_{\text{baseline}}(r)|
+\]
+
+\textbf{Quy tắc quyết định} (từ config):
+\begin{itemize}
+  \item Ngưỡng: \texttt{rating\_dist\_threshold = 0.1}
+  \item Nếu \texttt{total\_diff} $> 0.1$: Drift được phát hiện $\rightarrow$ xem xét retrain.
+\end{itemize}
+
+\begin{verbatim}
+result = detect_rating_drift(current_stats, baseline_stats, logger)
+# Output: {'metric': 'rating_distribution', 
+#          'drift_detected': True, 'total_difference': 0.15,
+#          'details': {'rating_5_diff': 0.08, ...}}
+\end{verbatim}
+
+\paragraph{Popularity Shift.}
+
+Sử dụng \textbf{Jaccard similarity} để so sánh top-20 items phổ biến nhất:
+\[
+  \text{Jaccard} = \frac{|\text{Top20}_{\text{current}} \cap \text{Top20}_{\text{baseline}}|}
+                        {|\text{Top20}_{\text{current}} \cup \text{Top20}_{\text{baseline}}|}, \quad
+  \text{shift} = 1 - \text{Jaccard}
+\]
+
+\textbf{Ngưỡng} (từ \texttt{DRIFT\_CONFIG}):
+\begin{itemize}
+  \item \texttt{popularity\_shift\_threshold = 0.2}
+  \item Nếu \texttt{shift} $> 0.2$ --- popularity distribution đã thay đổi đáng kể,
+        có thể do xu hướng mới, mùa vụ, hoặc viral products.
+\end{itemize}
+
+\begin{verbatim}
+result = detect_popularity_drift(current, baseline, logger)
+# Output: {'metric': 'popularity_distribution',
+#          'drift_detected': False, 'jaccard_similarity': 0.85,
+#          'shift': 0.15, 'details': {'new_items': [...]}}
+\end{verbatim}
+
+\paragraph{Interaction Rate Drift.}
+
+Theo dõi thay đổi trong hành vi người dùng thông qua tỷ lệ tương tác trung bình:
+\begin{itemize}
+  \item \textbf{avg\_interactions\_per\_user}: Từ \texttt{data\_stats.json}
+  \item \textbf{Change rate}: $\Delta = |\mu_{\text{current}} - \mu_{\text{baseline}}| / \mu_{\text{baseline}}$
+\end{itemize}
+
+\textbf{Ngưỡng}:
+\[
+  \texttt{interaction\_rate\_threshold} = 0.3 \quad (30\%)
+\]
+
+Nếu $\Delta > 0.3$: Interaction behavior đã drift đáng kể.
+
+\begin{verbatim}
+result = detect_interaction_drift(current, baseline, logger)
+# Output: {'metric': 'interaction_rate', 'drift_detected': False,
+#          'current_rate': 14.2, 'baseline_rate': 13.8,
+#          'change_rate': 0.029}
+\end{verbatim}
+
+\paragraph{Embedding Freshness.}
+
+\textbf{Vietnamese Embedding} (\texttt{AITeamVN/Vietnamese\_Embedding}, 1024 dim) cần được cập nhật định kỳ để phản ánh:
+\begin{itemize}
+  \item Sản phẩm mới được thêm vào catalog.
+  \item Mô tả sản phẩm được cập nhật (ingredients, features).
+  \item Cải tiến trong pre-trained model (nếu có).
+\end{itemize}
+
+\textbf{Chỉ số freshness} (từ \texttt{alerts\_config.yaml}):
+\[
+  \text{Age}_{\text{days}} = \lfloor \text{now} - \text{embeddings.created\_at} \rfloor
+\]
+
+\textbf{Ngưỡng}: \texttt{embedding\_age\_days = 30} $\rightarrow$ Embeddings được coi là \textit{stale}.
+
+\textbf{Embedding Drift Detection}:
+Khi regenerate embeddings, so sánh với version cũ bằng cosine similarity:
+\[
+  \text{sim}(i) = \frac{\mathbf{e}_i^{\text{old}} \cdot \mathbf{e}_i^{\text{new}}}
+                      {\|\mathbf{e}_i^{\text{old}}\| \|\mathbf{e}_i^{\text{new}}\|}
+\]
+
+Nếu $\text{mean}(\text{sim}) < 0.95$: Embeddings đã drift đáng kể --- cần retrain CF model (BERT-ALS).
+
+% ===================================================================
+\subsubsection*{Comprehensive Drift Report (từ \texttt{generate\_drift\_report()})}
+% ===================================================================
+
+Hệ thống tổng hợp tất cả drift checks vào một report định kỳ (weekly), lưu tại 
+\texttt{reports/drift/drift\_report\_YYYYMMDD\_HHMMSS.json}:
+
+\begin{verbatim}
+{
+  "generated_at": "2025-11-27T10:00:00",
+  "git_commit": "abc123",
+  "drift_detected": true,
+  "results": [
+    {
+      "metric": "rating_distribution",
+      "drift_detected": true,
+      "total_difference": 0.15,
+      "threshold": 0.1
+    },
+    {
+      "metric": "popularity_distribution", 
+      "drift_detected": false,
+      "jaccard_similarity": 0.85,
+      "shift": 0.15,
+      "threshold": 0.2
+    },
+    {
+      "metric": "interaction_rate",
+      "drift_detected": false,
+      "change_rate": 0.029,
+      "threshold": 0.3
+    }
+  ]
+}
+\end{verbatim}
+
+Quy tắc tổng hợp:
+\[
+  \text{drift\_detected} = \bigvee_{\text{result } r} r.\text{drift\_detected}
+\]
+
+\paragraph{CLI Usage:}
+\begin{verbatim}
+# Run drift detection
+python -m automation.drift_detection
+
+# Update baseline after confirmed changes
+python -m automation.drift_detection --update-baseline
+\end{verbatim}
+
+% ===================================================================
+\subsubsection*{Alerting System}
+% ===================================================================
+
+Hệ thống alerting hỗ trợ 3 channels: \textbf{Log}, \textbf{Email}, và \textbf{Slack},
+với severity levels: \texttt{info}, \texttt{warning}, \texttt{critical}.
+
+\paragraph{Alert Definitions (từ \texttt{alerts\_config.yaml}).}
+
+\begin{center}
+\begin{tabular}{|l|l|l|l|}
+\hline
+\textbf{Alert} & \textbf{Condition} & \textbf{Severity} & \textbf{Action} \\
+\hline
+\texttt{high\_latency} & $\text{avg\_latency} > 200$ms & warning & log \\
+\texttt{critical\_latency} & $\text{p95\_latency} > 500$ms & critical & email+slack \\
+\texttt{high\_error\_rate} & $\text{error\_rate} > 5\%$ & critical & email+slack \\
+\texttt{high\_fallback\_rate} & $\text{fallback} > 95\%$ & warning & log \\
+\texttt{low\_traffic} & $\text{requests\_per\_minute} = 0$ & warning & log \\
+\texttt{data\_drift} & drift\_detected = true & info & email \\
+\hline
+\end{tabular}
+\end{center}
+
+\paragraph{AlertManager Class (từ \texttt{alerting.py}).}
+
+\begin{verbatim}
+class AlertManager:
+    def send_alert(self, subject, message, severity, metadata=None):
+        # Log to logs/service/alerts.log
+        # Email for warning/critical (if enabled)
+        # Slack for warning/critical (if enabled)
+        
+    def check_alert_conditions(self, metrics, model_id):
+        # Check all thresholds from config
+        # Return list of triggered alerts
+\end{verbatim}
+
+\paragraph{Alert Cooldown.}
+
+Để tránh alert fatigue, áp dụng cooldown period:
+\[
+  \text{send\_alert} = (\text{now} - \text{last\_alert\_time}) > T_{\text{cooldown}}
+\]
+với $T_{\text{cooldown}} = 30$ phút cho cùng một loại alert.
+
+\paragraph{Alert Template (từ \texttt{templates} section).}
+
+\begin{verbatim}
+🚨 Critical Error Rate Alert
+
+Current error rate: {value:.1%}
+Threshold: {threshold:.1%}
+Errors in last 5 minutes: {error_count}
+Model: {model_id}
+
+Action Required: Check service logs for errors.
+\end{verbatim}
+
+\paragraph{Convenience Functions (từ \texttt{alerting.py}):}
+\begin{verbatim}
+# Send alert using singleton AlertManager
+from alerting import (send_alert, alert_high_latency, 
+                       alert_high_error_rate, alert_data_drift,
+                       alert_model_performance)
+
+send_alert("High Latency", "P95 = 250ms", severity="warning")
+alert_high_latency(latency_ms=250, threshold=200)
+alert_high_error_rate(error_rate=0.08, threshold=0.05)
+alert_data_drift(drift_result={'drift_detected': True, 'p_value': 0.02})
+alert_model_performance(current_recall=0.18, baseline_recall=0.22, 
+                        threshold_drop=0.1)
+\end{verbatim}
+
+% ===================================================================
+\subsubsection*{Retrain Decision Framework}
+% ===================================================================
+
+Quyết định retrain được đưa ra dựa trên tổng hợp nhiều tín hiệu (từ \texttt{retrain\_triggers} trong config):
+
+\begin{enumerate}
+  \item \textbf{Rating Drift}: Total distribution difference $> 0.1$.
+  \item \textbf{Popularity Shift}: Jaccard similarity $< 0.8$ (shift $> 0.2$).
+  \item \textbf{Interaction Rate Change}: Change rate $> 30\%$.
+  \item \textbf{Data Staleness}: Training data $> 30$ ngày tuổi.
+  \item \textbf{Embedding Staleness}: Vietnamese Embeddings $> 30$ ngày tuổi.
+  \item \textbf{Performance Drop}: CTR giảm $> 10\%$ so với baseline.
+\end{enumerate}
+
+\textbf{Decision Rule}:
+\[
+  \text{should\_retrain} = \bigvee_{i=1}^{6} \text{trigger}_i
+\]
+
+Nếu bất kỳ trigger nào active $\rightarrow$ đưa ra khuyến nghị retrain kèm lý do cụ thể.
+
+\begin{verbatim}
+# From alerts_config.yaml
+retrain_triggers:
+  rating_drift_pvalue: 0.05
+  popularity_correlation: 0.8
+  data_age_days: 30
+  ctr_drop_percent: 10
+  embedding_age_days: 30
+\end{verbatim}
+
+% ===================================================================
+\subsubsection*{Dashboard và Visualization (\texttt{service/dashboard.py})}
+% ===================================================================
+
+Hệ thống cung cấp Streamlit dashboard với 5 tabs chính:
+
+\begin{enumerate}
+  \item \textbf{Service Health}: Real-time latency, error rate, fallback rate, requests/minute charts.
+  \item \textbf{Training History}: Lịch sử training runs, model performance comparison (bar charts).
+  \item \textbf{Scheduler}: Quản lý scheduled jobs (enable/disable, run now, view logs).
+  \item \textbf{Drift Detection}: Kết quả drift checks, trend visualization.
+  \item \textbf{Model Info}: Thông tin model đang serve, registry status.
+\end{enumerate}
+
+\paragraph{Data Sources:}
+\begin{itemize}
+  \item \textbf{Training DB}: \texttt{logs/training\_metrics.db} (SQLite) --- lưu training runs (table \texttt{training\_runs}) và iteration metrics (table \texttt{iteration\_metrics} với các cột \texttt{run\_id}, \texttt{iteration}, \texttt{loss}, \texttt{validation\_ndcg})
+  \item \textbf{Service DB}: \texttt{logs/service\_metrics.db} (SQLite) --- lưu request logs (table \texttt{requests}) và health metrics (table \texttt{service\_health})
+  \item \textbf{API}: \texttt{/scheduler/status}, \texttt{/scheduler/jobs} --- real-time scheduler status
+\end{itemize}
+
+Dashboard hỗ trợ:
+\begin{itemize}
+  \item \textbf{Time range selection}: Last 15min / 1h / 6h / 24h.
+  \item \textbf{Auto-refresh}: Tự động cập nhật mỗi 10 giây (configurable).
+  \item \textbf{Interactive charts}: Line charts cho metrics time series, bar charts cho model comparison.
+\end{itemize}
+
+\paragraph{Kết nối API:}
+\begin{verbatim}
+API_BASE_URL = os.environ.get("API_URL", "http://viecomrec-api:8000")
+# Docker: viecomrec-api:8000
+# Local: localhost:8000
+\end{verbatim}
+
+% ===================================================================
+\subsubsection*{Check Intervals và Scheduling (từ \texttt{alerts\_config.yaml})}
+% ===================================================================
+
+\begin{center}
+\begin{tabular}{|l|l|l|}
+\hline
+\textbf{Check Type} & \textbf{Interval} & \textbf{Rationale} \\
+\hline
+Health check & 60 giây & Phát hiện nhanh service issues \\
+Drift detection & 168 giờ (weekly) & Tránh false positives từ noise \\
+Embedding freshness & 24 giờ (daily) & Kiểm tra định kỳ \\
+Alert cooldown & 30 phút & Giảm alert fatigue \\
+\hline
+\end{tabular}
+\end{center}
+
+\paragraph{Configuration (từ \texttt{intervals} section):}
+\begin{verbatim}
+intervals:
+  health_check_seconds: 60
+  drift_check_hours: 168
+  alert_cooldown_minutes: 30
+\end{verbatim}
+
+Lịch trình monitoring được tích hợp với Automation Pipeline (mục 7.2)
+để tự động trigger retrain khi drift được phát hiện.
+
+\paragraph{Lưu ý về Embedding Models:}
+Kiểm tra freshness cho Vietnamese Embedding (1024 dim) với ngưỡng 30 ngày.
+Chi tiết về sự phân biệt với ViSoBERT được trình bày tại \textbf{mục 3.0.3.4}.

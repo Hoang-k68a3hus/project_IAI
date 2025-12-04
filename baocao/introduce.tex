@@ -1,0 +1,167 @@
+\section{Đặt vấn đề}
+
+\subsection{Bối cảnh ngành thương mại điện tử và nhu cầu cá nhân hóa}
+
+Trong những năm gần đây, thương mại điện tử tại Việt Nam đã chứng kiến sự tăng trưởng vượt bậc, trở thành một trong những thị trường năng động nhất khu vực Đông Nam Á. Theo báo cáo của Bộ Công Thương, quy mô thị trường thương mại điện tử Việt Nam đạt khoảng \textbf{16.4 tỷ USD} vào năm 2023, với tốc độ tăng trưởng kép hàng năm (CAGR) vượt mức \textbf{20\%}. Trong bức tranh tổng thể đó, ngành hàng mỹ phẩm -- làm đẹp nổi lên như một trong những phân khúc phát triển nhanh nhất, đáp ứng nhu cầu chăm sóc bản thân ngày càng cao của người tiêu dùng Việt.
+
+Tuy nhiên, sự bùng nổ về số lượng sản phẩm và người bán cũng đặt ra những thách thức đáng kể:
+
+\begin{itemize}
+    \item \textbf{Hiện tượng quá tải thông tin (Information Overload):} Người tiêu dùng phải đối mặt với hàng nghìn sản phẩm mỹ phẩm từ vô số thương hiệu, dẫn đến tình trạng ``nghẽn'' trong quá trình ra quyết định mua hàng. Việc tìm kiếm sản phẩm phù hợp trở nên tốn thời gian và gây mệt mỏi.
+    
+    \item \textbf{Kỳ vọng về trải nghiệm cá nhân hóa:} Người dùng hiện đại không chỉ tìm kiếm sản phẩm chất lượng mà còn mong muốn những đề xuất được ``may đo'' theo nhu cầu riêng. Theo khảo sát của Accenture, \textbf{91\%} người tiêu dùng có xu hướng ưu tiên các thương hiệu cung cấp gợi ý phù hợp với sở thích cá nhân.
+    
+    \item \textbf{Áp lực cạnh tranh khốc liệt:} Các sàn thương mại điện tử cần những giải pháp công nghệ để gia tăng \textit{tỷ lệ chuyển đổi (conversion rate)}, giảm thiểu \textit{tỷ lệ bỏ giỏ hàng}, và xây dựng lòng trung thành của khách hàng.
+\end{itemize}
+
+Trong bối cảnh đó, \textbf{Hệ thống Gợi ý (Recommender System)} đóng vai trò như một công cụ chiến lược, giúp kết nối người dùng với sản phẩm phù hợp một cách tự động và thông minh.
+
+\subsection{Thách thức đặc thù của dữ liệu mỹ phẩm Việt Nam}
+
+Việc xây dựng hệ thống gợi ý cho ngành mỹ phẩm Việt Nam gặp phải những khó khăn kỹ thuật đặc thù, xuất phát từ bản chất dữ liệu thu thập được. Đồ án này tập trung giải quyết ba thách thức cốt lõi sau:
+
+\subsubsection{Dữ liệu cực kỳ thưa (Extreme Data Sparsity)}
+
+\begin{itemize}
+    \item \textbf{Thực trạng:} Dữ liệu thương mại điện tử mỹ phẩm thường có độ thưa cực kỳ cao,
+    với trung bình chỉ vài tương tác mỗi người dùng. Số liệu thống kê chi tiết của tập dữ liệu thực nghiệm 
+    được trình bày tại \textbf{mục 3.0.2} và \textbf{Chương 6}.
+    
+    \item \textbf{Nguyên nhân:}
+    \begin{itemize}
+        \item Phần lớn người dùng chỉ thực hiện một vài giao dịch hoặc đánh giá.
+        \item Tỷ lệ viết đánh giá sau khi mua hàng thường rất thấp (dưới 5\%).
+        \item Danh mục mỹ phẩm đa dạng về chủng loại và thương hiệu.
+    \end{itemize}
+    
+    \item \textbf{Hệ quả:} Các thuật toán \textbf{Collaborative Filtering (CF)} truyền thống hoạt động kém hiệu quả do thiếu điểm chung giữa các người dùng để học được các mẫu cộng tác (collaborative patterns).
+\end{itemize}
+
+\subsubsection{Phân phối đánh giá bị lệch nghiêm trọng (Severely Skewed Ratings)}
+
+\begin{itemize}
+    \item \textbf{Hiện tượng:} Trong tập dữ liệu, khoảng \textbf{95\%} đánh giá là 5 sao; phần còn lại phân bố rải rác ở các mức thấp hơn. Điều này tạo ra hiện tượng ``nhiễu dương tính giả'' (false positive noise).
+    
+    \item \textbf{Nguyên nhân:}
+    \begin{itemize}
+        \item Văn hóa người Việt có xu hướng ngại đánh giá tiêu cực công khai.
+        \item Các chương trình khuyến mãi ``đổi quà lấy đánh giá 5 sao'' khá phổ biến.
+        \item Tồn tại hiện tượng đánh giá ảo (fake reviews).
+    \end{itemize}
+    
+    \item \textbf{Hệ quả:} Việc phân biệt sản phẩm người dùng \textit{thực sự yêu thích} với sản phẩm họ chỉ \textit{đánh giá cho có} trở nên vô cùng khó khăn. Đánh giá 5 sao mất đi khả năng phân biệt (discriminative power).
+\end{itemize}
+
+\subsubsection{Vấn đề khởi động lạnh (Cold-Start Problem)}
+
+\begin{itemize}
+    \item \textbf{Thực trạng:} Đa số người dùng có rất ít tương tác (dưới 2 lần), 
+    tạo thành nhóm ``người dùng khởi động lạnh'' (cold-start users). 
+    Tỷ lệ cụ thể được trình bày tại \textbf{mục 3.0.2}.
+    
+    \item \textbf{Tác động:}
+    \begin{itemize}
+        \item Không đủ dữ liệu lịch sử để áp dụng Collaborative Filtering.
+        \item Chất lượng gợi ý ban đầu kém, ảnh hưởng đến trải nghiệm người dùng mới.
+        \item Tăng nguy cơ mất khách hàng ngay từ những lần truy cập đầu tiên.
+    \end{itemize}
+    
+    \item \textbf{Quy mô:} Với tỷ lệ cold-start chiếm đa số, hệ thống phải có chiến lược dự phòng (fallback) mạnh mẽ, không thể chỉ dựa vào CF đơn thuần.
+\end{itemize}
+
+\section{Mục tiêu đề tài}
+
+\subsection{Mục tiêu tổng quát}
+
+Xây dựng một \textbf{Hệ thống Gợi ý Lai (Hybrid Recommender System)} được tối ưu hóa cho ngành mỹ phẩm trên các sàn thương mại điện tử Việt Nam. Hệ thống phải giải quyết được ba thách thức cốt lõi: \textit{dữ liệu thưa}, \textit{đánh giá bị lệch}, và \textit{khởi động lạnh}, đồng thời đảm bảo khả năng triển khai thực tế (production-ready).
+
+\subsection{Mục tiêu cụ thể}
+
+Đề tài được thiết kế xoay quanh \textbf{ba trụ cột chính}, tương ứng với ba mảng kỹ thuật then chốt:
+
+\subsubsection{Xây dựng thuật toán Hybrid kết hợp Collaborative Filtering và Content-based Filtering}
+
+\textbf{1. Mô-đun Collaborative Filtering (cho người dùng có đủ dữ liệu):}
+
+\begin{itemize}
+    \item Triển khai mô hình \textbf{ALS (Alternating Least Squares)} \cite{hu2008collaborative} với implicit feedback, sử dụng \textit{confidence score} được làm giàu từ nội dung bình luận thay vì rating thô.
+    \item Áp dụng regularization cao ($\lambda = 0.05$--$0.15$) để bù đắp cho tính thưa của dữ liệu.
+    \item Khởi tạo vector sản phẩm (item factors) từ embedding PhoBERT để hỗ trợ các sản phẩm ít tương tác.
+    \item Chỉ huấn luyện trên nhóm ``trainable users'' (người dùng có $\geq 2$ tương tác, chiếm khoảng \textbf{9.6\%} tổng số người dùng).
+\end{itemize}
+
+\textbf{2. Mô-đun Content-based Filtering (cho người dùng cold-start):}
+
+\begin{itemize}
+    \item Sử dụng \textbf{PhoBERT} để tạo embedding ngữ nghĩa 1024 chiều cho sản phẩm từ thông tin: tên, thành phần, công dụng, loại da phù hợp, thương hiệu, và mô tả chi tiết.
+    \item Tính độ tương tự cosine giữa sản phẩm trong lịch sử người dùng với các ứng cử viên tiềm năng.
+    \item Kết hợp với tín hiệu độ phổ biến (popularity) để đảm bảo chất lượng gợi ý cho người dùng mới.
+\end{itemize}
+
+\textbf{3. Cơ chế Hybrid Reranking:}
+
+\begin{itemize}
+    \item Định tuyến thông minh: Người dùng có đủ dữ liệu ($\geq 2$ tương tác) đi theo nhánh CF; người dùng cold-start đi theo nhánh Content-based.
+    \item Kết hợp điểm số từ nhiều nguồn (CF score, content similarity, popularity, quality) với trọng số được điều chỉnh theo loại người dùng.
+    \item Công thức toán học chi tiết được trình bày tại \textbf{mục 5.2 (Hybrid Reranking)}.
+\end{itemize}
+
+\subsubsection{Ứng dụng Xử lý Ngôn ngữ Tự nhiên (NLP) với PhoBERT cho tiếng Việt}
+
+\textbf{1. Tiền xử lý văn bản tiếng Việt:}
+
+\begin{itemize}
+    \item Chuẩn hóa Unicode và xử lý các ký tự đặc biệt.
+    \item Mở rộng viết tắt và teencode phổ biến trong lĩnh vực mỹ phẩm (VD: ``spf'', ``msm'', ``em bé'').
+    \item Sửa lỗi chính tả và chuẩn hóa tên thành phần hóa học (ingredients).
+\end{itemize}
+
+\textbf{2. Trích xuất đặc trưng ngữ nghĩa:}
+
+\begin{itemize}
+    \item Sử dụng mô hình \textbf{PhoBERT} (vinai/phobert-base) được huấn luyện sẵn trên kho ngữ liệu tiếng Việt lớn.
+    \item Tạo ``super text'' bằng cách ghép các trường thông tin với token \texttt{[SEP]}.
+    \item Trích xuất embedding 768 chiều cho mỗi sản phẩm bằng phương pháp mean pooling.
+\end{itemize}
+
+\textbf{3. Phân tích cảm xúc (Sentiment Analysis) từ bình luận:}
+
+\begin{itemize}
+    \item Sử dụng mô hình \textbf{ViSoBERT} \cite{visobert} để phân tích cảm xúc từ bình luận người dùng.
+    \item Kết hợp điểm cảm xúc với rating để tính \textit{confidence score}, giúp phân biệt đánh giá thực sự tích cực với đánh giá hời hợt.
+    \item Giải quyết hiệu quả vấn đề rating skew (95\% đánh giá 5 sao).
+\end{itemize}
+
+\subsubsection{Triển khai hệ thống theo hướng MLOps}
+
+\textbf{1. Tự động hóa pipeline xử lý dữ liệu và huấn luyện:}
+
+\begin{itemize}
+    \item Xây dựng pipeline end-to-end từ thu thập, làm sạch, đến huấn luyện mô hình.
+    \item Hệ thống lập lịch (scheduler) tự động retrain khi có dữ liệu mới.
+    \item Đảm bảo tính tái tạo (reproducibility) thông qua versioning dữ liệu và mô hình.
+\end{itemize}
+
+\textbf{2. Giám sát và phát hiện suy giảm (Monitoring \& Drift Detection):}
+
+\begin{itemize}
+    \item Theo dõi data drift: phát hiện thay đổi trong phân phối rating, tương tác.
+    \item Theo dõi model drift: giám sát các chỉ số Recall@K, NDCG@K theo thời gian.
+    \item Cơ chế cảnh báo tự động khi hiệu năng giảm dưới ngưỡng cho phép.
+\end{itemize}
+
+\textbf{3. Model Registry và Quản lý phiên bản:}
+
+\begin{itemize}
+    \item Lưu trữ các phiên bản mô hình kèm metadata (hyperparameters, metrics, data hash).
+    \item Hỗ trợ so sánh và lựa chọn mô hình tốt nhất.
+    \item Cơ chế rollback tự động khi mô hình mới hoạt động kém hơn.
+\end{itemize}
+
+\textbf{4. Triển khai thực tế với Docker:}
+
+\begin{itemize}
+    \item Đóng gói toàn bộ hệ thống trong Docker container.
+    \item Cung cấp API REST (FastAPI) để tích hợp với các hệ thống thương mại điện tử.
+    \item Hỗ trợ hot-reload mô hình mà không cần restart service.
+\end{itemize}

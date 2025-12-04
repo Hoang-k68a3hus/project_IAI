@@ -1,0 +1,65 @@
+{
+  "data_refresh": {
+    "enabled": true,
+    "description": "Daily data refresh from raw CSV files",
+    "schedule": {
+      "hour": 2,
+      "minute": 0
+    },
+    "module": "automation.data_refresh",
+    "args": []
+  },
+  "bert_embeddings": {
+    "enabled": true,
+    "description": "Weekly BERT embeddings refresh",
+    "schedule": {
+      "day_of_week": "tue",
+      "hour": 3,
+      "minute": 0
+    },
+    "module": "automation.bert_embeddings",
+    "args": []
+  },
+  "drift_detection": {
+    "enabled": true,
+    "description": "Weekly drift detection monitoring",
+    "schedule": {
+      "minute": 30,
+      "hour": 8
+    },
+    "module": "automation.drift_detection",
+    "args": []
+  },
+  "model_training": {
+    "enabled": false,
+    "description": "Weekly model training (ALS + BPR)",
+    "schedule": {
+      "day_of_week": "sun",
+      "hour": 3,
+      "minute": 0
+    },
+    "module": "automation.model_training",
+    "args": [
+      "--auto-select"
+    ]
+  },
+  "model_deployment": {
+    "enabled": true,
+    "description": "Daily model deployment check",
+    "schedule": {
+      "hour": 5,
+      "minute": 0
+    },
+    "module": "automation.model_deployment",
+    "args": []
+  },
+  "health_check": {
+    "enabled": true,
+    "description": "Hourly health check",
+    "schedule": {
+      "minute": 30
+    },
+    "module": "automation.health_check",
+    "args": []
+  }
+}

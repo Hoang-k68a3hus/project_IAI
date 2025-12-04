@@ -1,0 +1,514 @@
+% -----------------------------------------------------------------
+% 5.3 Smart Search với Vietnamese Embedding
+%
+% Văn phong: Nhà nghiên cứu Toán ứng dụng - chính xác, notation nhất quán,
+% trình bày cấu trúc, định nghĩa formal
+%
+% Model: AITeamVN/Vietnamese_Embedding (1024 dim)
+
+\textit{Smart Search là module tìm kiếm ngữ nghĩa (semantic search) cho phép người dùng
+tìm sản phẩm bằng truy vấn tiếng Việt tự nhiên. Phần này trình bày kiến trúc encoder,
+thuật toán tìm kiếm, và cơ chế kết hợp với Hybrid Reranking để đảm bảo kết quả
+vừa relevant với query vừa personalized cho user.}
+
+% ===================================================================
+\subsubsection*{Ký hiệu và định nghĩa}
+% ===================================================================
+
+Cho trước:
+\begin{itemize}
+  \item $\mathcal{I}$: tập sản phẩm, $|\mathcal{I}| \approx 2{,}200$.
+  \item $q \in \mathcal{Q}$: truy vấn tìm kiếm (chuỗi văn bản tiếng Việt).
+  \item $\mathcal{V}$: vocabulary của tokenizer ($|\mathcal{V}| \approx 250{,}000$ cho Vietnamese Embedding).
+  \item $d = 1024$: dimension của \textbf{Vietnamese Embedding} space.
+\end{itemize}
+
+\textbf{Lưu ý về mô hình}:
+\begin{itemize}
+  \item \textbf{Vietnamese Embedding} \cite{vietnamese_embedding} (\texttt{AITeamVN/Vietnamese\_Embedding}, 1024 dim): 
+        Dùng cho Smart Search, product embeddings, và Hybrid Reranking.
+  \item Khác với ViSoBERT \cite{visobert} (768 dim) chỉ dùng trong Data Preprocessing layer.
+\end{itemize}
+
+\begin{definition}[Product Text Representation]
+Mỗi sản phẩm $i \in \mathcal{I}$ được biểu diễn bởi chuỗi văn bản:
+\[
+  t_i = \texttt{[CLS]} \oplus \text{name}_i \oplus \texttt{[SEP]} \oplus \text{ingredient}_i 
+        \oplus \texttt{[SEP]} \oplus \text{feature}_i \oplus \texttt{[SEP]} \oplus \text{description}_i
+\]
+trong đó $\oplus$ là phép nối chuỗi, $\texttt{[CLS]}$ và $\texttt{[SEP]}$ là special tokens.
+\end{definition}
+
+% ===================================================================
+\subsubsection*{Query Encoder với Vietnamese Embedding}
+% ===================================================================
+
+Hệ thống sử dụng \textbf{Vietnamese Embedding} \cite{vietnamese_embedding} (\texttt{AITeamVN/Vietnamese\_Embedding}) 
+--- mô hình pre-trained cho tiếng Việt với 1024 dimensions, được tối ưu cho 
+semantic similarity tasks.
+
+\paragraph{Query Preprocessing.}
+
+Trước khi encode, queries được tiền xử lý:
+\begin{enumerate}
+  \item \textbf{Lowercase và strip whitespace}.
+  \item \textbf{Abbreviation expansion}: Mở rộng viết tắt tiếng Việt phổ biến.
+  \item \textbf{Normalize whitespace} và remove special characters.
+\end{enumerate}
+
+\textbf{Bảng abbreviations (trích)}:
+\begin{center}
+\begin{tabular}{|l|l||l|l|}
+\hline
+\textbf{Viết tắt} & \textbf{Mở rộng} & \textbf{Viết tắt} & \textbf{Mở rộng} \\
+\hline
+kcn & kem chống nắng & srm & sữa rửa mặt \\
+dn & da nhờn & dk & da khô \\
+dd & dưỡng da & tdc & tẩy da chết \\
+nht & nước hoa hồng & dhh & da hỗn hợp \\
+\hline
+\end{tabular}
+\end{center}
+
+\paragraph{Tokenization.}
+
+Với input text $t$, tokenizer thực hiện:
+\begin{enumerate}
+  \item SentencePiece/BPE tokenization cho tiếng Việt.
+  \item Output: sequence of token IDs $\mathbf{x} = (x_1, \dots, x_n)$ với $x_j \in \{1, \dots, |\mathcal{V}|\}$.
+\end{enumerate}
+
+Maximum sequence length: $n_{\max} = 256$ tokens (truncate nếu vượt quá).
+
+\paragraph{Encoding Function.}
+
+Định nghĩa encoder function $\phi: \mathcal{T} \rightarrow \mathbb{R}^{1024}$:
+\[
+  \phi(t) = \text{MeanPooling}(\text{VietnameseEmbedding}(t))
+\]
+trong đó mean pooling lấy trung bình các hidden states (trừ padding tokens),
+thay vì chỉ dùng $\texttt{[CLS]}$ token.
+
+\paragraph{Normalized Embedding.}
+
+Để sử dụng cosine similarity hiệu quả, embeddings được L2-normalize:
+\[
+  \mathbf{e}_i = \frac{\phi(t_i)}{\|\phi(t_i)\|_2} \in \mathbb{R}^{1024}, \quad \|\mathbf{e}_i\|_2 = 1
+\]
+
+Tương tự cho query: $\mathbf{e}_q = \phi(q) / \|\phi(q)\|_2$.
+
+\paragraph{Query Embedding Cache (LRU).}
+
+Để giảm latency cho repeated queries, hệ thống sử dụng LRU cache:
+\begin{itemize}
+  \item \textbf{Capacity}: 1,000 query embeddings.
+  \item \textbf{Cache key}: \texttt{preprocessed\_query + normalize\_flag}.
+  \item \textbf{Expected hit rate}: $\sim$30\% trong production (users thường search các terms phổ biến).
+\end{itemize}
+
+Khi cache hit, encoding time giảm từ $\sim$40ms xuống $< 1$ms.
+
+% ===================================================================
+\subsubsection*{Semantic Similarity}
+% ===================================================================
+
+\begin{definition}[Query-Item Similarity]
+Cho query $q$ và item $i$, độ tương đồng ngữ nghĩa được định nghĩa:
+\[
+  \text{sim}(q, i) = \cos(\mathbf{e}_q, \mathbf{e}_i) = \mathbf{e}_q^\top \mathbf{e}_i \in [-1, 1]
+\]
+Do embeddings đã normalize, tích vô hướng chính là cosine similarity.
+\end{definition}
+
+\paragraph{Tính chất.}
+\begin{itemize}
+  \item $\text{sim}(q, i) = 1$ khi $\mathbf{e}_q = \mathbf{e}_i$ (identical semantics).
+  \item $\text{sim}(q, i) = 0$ khi $\mathbf{e}_q \perp \mathbf{e}_i$ (orthogonal, unrelated).
+  \item $\text{sim}(q, i) = -1$ khi $\mathbf{e}_q = -\mathbf{e}_i$ (hiếm gặp trong practice).
+\end{itemize}
+
+\paragraph{Rescaling.}
+
+Để đồng bộ với các signals khác trong Hybrid Reranking (mục 5.2), rescale về $[0, 1]$:
+\[
+  s_{\text{search}}(q, i) = \frac{\text{sim}(q, i) + 1}{2} \in [0, 1]
+\]
+
+% ===================================================================
+\subsubsection*{Search Index và Approximate Nearest Neighbor}
+% ===================================================================
+
+Naive search có complexity $O(|\mathcal{I}| \cdot d)$ cho mỗi query.
+Với $|\mathcal{I}| = 2{,}200$ và $d = 1024$, đây là acceptable ($\approx 2.25$M operations).
+Hệ thống hỗ trợ cả exact search và FAISS ANN.
+
+\paragraph{Exact Search (Default).}
+
+Với $|\mathcal{I}| < 5{,}000$, exact search đủ nhanh:
+\[
+  \text{similarities} = \mathbf{E}_{\text{norm}} \cdot \mathbf{e}_q
+\]
+trong đó $\mathbf{E}_{\text{norm}} \in \mathbb{R}^{|\mathcal{I}| \times 1024}$ là ma trận embeddings đã normalize.
+
+Complexity: $O(|\mathcal{I}| \cdot d) \approx 2.25$M operations, latency $< 5$ms.
+
+\paragraph{FAISS Index (Optional).}
+
+Hệ thống hỗ trợ 3 loại FAISS index cho large catalogs:
+
+\textbf{1. IndexFlatIP} (default khi enable FAISS):
+\begin{itemize}
+  \item Exact search với Inner Product (= cosine cho normalized vectors).
+  \item Phù hợp cho $|\mathcal{I}| < 10{,}000$.
+\end{itemize}
+
+\textbf{2. IndexIVFFlat} (cho 10K--1M items):
+\begin{itemize}
+  \item Sử dụng $\text{nlist} = \sqrt{|\mathcal{I}|}$ clusters.
+  \item Cần training step trước khi add vectors.
+  \item \texttt{nprobe = 10}: số clusters search (trade-off accuracy/speed).
+\end{itemize}
+
+\textbf{3. IndexHNSWFlat} (fast approximate):
+\begin{itemize}
+  \item Hierarchical Navigable Small World graph.
+  \item $M = 32$ connections, \texttt{efConstruction = 40}, \texttt{efSearch = 16}.
+  \item Nhanh nhất nhưng approximate.
+\end{itemize}
+
+\paragraph{Metadata Inverted Indices.}
+
+Ngoài embedding search, hệ thống xây dựng inverted indices cho filtering:
+\begin{itemize}
+  \item \texttt{brand\_index}: $\text{brand} \rightarrow \{\text{product\_ids}\}$.
+  \item \texttt{category\_index}: $\text{category} \rightarrow \{\text{product\_ids}\}$.
+  \item \texttt{price\_data}: $\text{product\_id} \rightarrow \text{price}$.
+\end{itemize}
+
+Filtering strategy: \textbf{Post-filter} (search trước, filter sau) thay vì pre-filter 
+(xây index riêng cho mỗi filter combination).
+
+% ===================================================================
+\subsubsection*{Multi-Signal Reranking trong Search}
+% ===================================================================
+
+Kết quả search thuần túy có thể không phù hợp với preferences của user cụ thể.
+Hệ thống áp dụng multi-signal reranking với 4 tín hiệu.
+
+\begin{definition}[Search Reranking Score]
+Cho query $q$ và item $i$, điểm reranking được định nghĩa:
+\[
+  S_{\text{rerank}}(q, i) = w_{\text{sem}} \cdot s_{\text{search}}(q, i) 
+                         + w_{\text{pop}} \cdot s_{\text{pop}}(i)
+                         + w_{\text{quality}} \cdot s_{\text{quality}}(i)
+                         + w_{\text{recency}} \cdot s_{\text{recency}}(i)
+\]
+trong đó (từ \texttt{smart\_search.py}):
+\[
+  \mathbf{w} = (w_{\text{sem}}, w_{\text{pop}}, w_{\text{quality}}, w_{\text{recency}}) 
+             = (0.50, 0.25, 0.15, 0.10)^\top
+\]
+\end{definition}
+
+\paragraph{Signal Computation.}
+\begin{itemize}
+  \item $s_{\text{search}}(q, i)$: Semantic similarity (rescaled to $[0,1]$).
+  \item $s_{\text{pop}}(i) = \min\left(\frac{\log(1 + \texttt{num\_sold}_i)}{\log(1 + 100{,}000)}, 1\right)$: 
+        Log-normalized popularity.
+  \item $s_{\text{quality}}(i) = \frac{\bar{r}_i - 1}{4}$: Rating normalized to $[0,1]$.
+  \item $s_{\text{recency}}(i) = 0.5$ (placeholder, cần product launch date).
+\end{itemize}
+
+\paragraph{Candidate Expansion.}
+
+Để reranking có đủ candidates, hệ thống fetch $3K$ candidates trước khi rerank 
+và trả về top-$K$ (với \texttt{candidate\_multiplier = 3}).
+
+% ===================================================================
+\subsubsection*{Attribute Filtering}
+% ===================================================================
+
+Ngoài semantic matching, users có thể filter theo attributes.
+
+\paragraph{Filter Types.}
+
+\begin{itemize}
+  \item \textbf{Category}: $\mathcal{F}_{\text{cat}} \subseteq \{\text{``skincare''}, \text{``makeup''}, \dots\}$.
+  \item \textbf{Brand}: $\mathcal{F}_{\text{brand}} \subseteq \{\text{``L'Oreal''}, \text{``Innisfree''}, \dots\}$.
+  \item \textbf{Price Range}: $\mathcal{F}_{\text{price}} = [p_{\min}, p_{\max}]$.
+  \item \textbf{Skin Type}: $\mathcal{F}_{\text{skin}} \subseteq \{\text{``oily''}, \text{``dry''}, \text{``acne''}, \dots\}$.
+\end{itemize}
+
+\paragraph{Filtering Operation.}
+
+Định nghĩa indicator function cho item $i$:
+\[
+  \mathbb{1}_{\mathcal{F}}(i) = 
+  \begin{cases}
+    1 & \text{nếu item } i \text{ thỏa mãn tất cả filter conditions} \\
+    0 & \text{ngược lại}
+  \end{cases}
+\]
+
+Tập kết quả sau filtering:
+\[
+  \mathcal{I}_{\mathcal{F}} = \{i \in \mathcal{I} : \mathbb{1}_{\mathcal{F}}(i) = 1\}
+\]
+
+Search chỉ thực hiện trên $\mathcal{I}_{\mathcal{F}}$:
+\[
+  \text{filtered\_search}(\mathbf{e}_q, K, \mathcal{F}) = \text{search}(\mathbf{e}_q, K) \cap \mathcal{I}_{\mathcal{F}}
+\]
+
+\paragraph{Post-filter vs Pre-filter.}
+
+\begin{itemize}
+  \item \textbf{Pre-filter}: Build separate index cho mỗi filter combination --- infeasible với nhiều filters.
+  \item \textbf{Post-filter} (used): Search trên full index, sau đó filter results.
+\end{itemize}
+
+Để đảm bảo đủ $K$ results sau filtering, hệ thống search $2K$ candidates trước khi filter.
+
+% ===================================================================
+\subsubsection*{Search Pipeline và Methods}
+% ===================================================================
+
+\texttt{SmartSearchService} cung cấp 3 phương thức search chính:
+
+\paragraph{Method 1: Semantic Search (\texttt{search}).}
+
+\begin{verbatim}
+Input: query q, topk K, filters F, exclude_ids
+
+1. Query Preprocessing:
+   q' <- expand_abbreviations(lowercase(q))
+
+2. Query Encoding (với cache):
+   if cache.contains(q'):
+       e_q <- cache.get(q')
+   else:
+       e_q <- VietnameseEmbedding(q')[CLS]
+       e_q <- e_q / ||e_q||_2
+       cache.put(q', e_q)
+
+3. Candidate Retrieval (3K candidates):
+   if filters:
+       candidates <- index.search_with_filter(e_q, 3K, F)
+   else:
+       candidates <- index.search(e_q, 3K)
+
+4. Filter by min_semantic_score (>= 0.25):
+   candidates <- filter(candidates, score >= 0.25)
+
+5. Multi-signal Reranking:
+   For each (pid, sem_score) in candidates:
+       pop_score <- log_normalize(num_sold[pid])
+       quality_score <- normalize_rating(avg_star[pid])
+       final_score <- 0.50*sem + 0.25*pop + 0.15*quality + 0.10*recency
+
+6. Return top-K by final_score
+
+Output: [(pid_1, score_1), ..., (pid_K, score_K)]
+\end{verbatim}
+
+\paragraph{Method 2: Similar Items (\texttt{search\_similar}).}
+
+Tìm sản phẩm tương tự với một sản phẩm cho trước:
+\[
+  \text{similar}(i) = \argmax_{j \neq i} \cos(\mathbf{e}_i, \mathbf{e}_j)
+\]
+
+Use case: ``Sản phẩm tương tự'' trên product detail page.
+
+\paragraph{Method 3: User Profile Search (\texttt{search\_by\_user\_profile}).}
+
+Tìm sản phẩm phù hợp với profile của user (từ lịch sử):
+\begin{enumerate}
+  \item Compute user profile embedding $\mathbf{e}_u$ từ history (weighted\_mean strategy).
+  \item Search với $\mathbf{e}_u$ làm query.
+  \item Exclude products đã trong history.
+\end{enumerate}
+
+Nếu user không có history, fallback sang popular items.
+
+% ===================================================================
+\subsubsection*{Use Cases và Examples}
+% ===================================================================
+
+\paragraph{Use Case 1: Semantic Understanding với Abbreviation.}
+
+Query gốc: ``kcn cho dn''
+
+Sau preprocessing: ``kem chống nắng cho da nhờn''
+
+Hệ thống hiểu:
+\begin{itemize}
+  \item ``kem chống nắng'' $\rightarrow$ category: sunscreen.
+  \item ``da nhờn'' $\rightarrow$ skin type: oily.
+\end{itemize}
+
+Kết quả: sản phẩm có description chứa ``kiểm soát dầu'', ``không bóng nhờn'', ``thấm nhanh''.
+
+\paragraph{Use Case 2: Synonym và Cross-Language.}
+
+Các queries sau đều return similar results (do Vietnamese Embedding capture semantics):
+\begin{itemize}
+  \item ``son môi đỏ''
+  \item ``son màu đỏ''
+  \item ``lipstick red'' (mixed Vietnamese-English)
+  \item ``son thỏi màu đỏ tươi''
+\end{itemize}
+
+\paragraph{Use Case 3: Similar Items.}
+
+Trên product detail page của ``Kem dưỡng ẩm Innisfree Green Tea'':
+
+\texttt{search\_similar(product\_id=123)} trả về:
+\begin{itemize}
+  \item Các kem dưỡng ẩm khác của Innisfree.
+  \item Kem dưỡng có thành phần Green Tea từ brands khác.
+  \item Sản phẩm có công dụng tương tự (hydrating, soothing).
+\end{itemize}
+
+\paragraph{Use Case 4: User Profile Search.}
+
+User có history: [serum vitamin C, kem chống nắng, tẩy da chết]
+
+\texttt{search\_by\_user\_profile(history)} trả về:
+\begin{itemize}
+  \item Sản phẩm skincare phù hợp với routine hiện tại.
+  \item Ưu tiên sản phẩm có thành phần/công dụng tương tự.
+  \item Exclude các sản phẩm đã mua.
+\end{itemize}
+
+\paragraph{Use Case 5: Filtered Search.}
+
+Query: ``serum'' + filters: \{brand: ``The Ordinary'', max\_price: 500000\}
+
+\begin{enumerate}
+  \item Get candidates từ brand\_index[``the ordinary''].
+  \item Filter bởi price $\leq 500{,}000$.
+  \item Search trong candidates với query embedding ``serum''.
+  \item Rerank và return top-K.
+\end{enumerate}
+
+% ===================================================================
+\subsubsection*{Performance Characteristics}
+% ===================================================================
+
+\paragraph{Latency Breakdown.}
+
+\begin{center}
+\begin{tabular}{|l|l|l|}
+\hline
+\textbf{Step} & \textbf{Latency} & \textbf{Notes} \\
+\hline
+Query Preprocessing & $<$ 1ms & Abbreviation expansion, normalize \\
+Query Encoding & 30--50ms & Vietnamese Embedding inference (CPU) \\
+Query Encoding (cached) & $<$ 1ms & LRU cache hit ($\sim$30\% rate) \\
+Index Search & $<$ 5ms & Exact search (2,200 items × 1024 dim) \\
+Attribute Filtering & $<$ 5ms & In-memory inverted index \\
+Multi-signal Reranking & 10--20ms & Compute 4 signals, sort \\
+\hline
+\textbf{Total (no cache)} & 50--80ms & Within SLA target \\
+\textbf{Total (cache hit)} & 20--35ms & Significantly faster \\
+\hline
+\end{tabular}
+\end{center}
+
+\paragraph{Optimization Strategies.}
+
+\begin{enumerate}
+  \item \textbf{Query Encoding Cache}: LRU cache (1,000 entries) cho repeated queries.
+  \item \textbf{Batch Encoding}: Nếu có multiple concurrent queries, batch inference.
+  \item \textbf{GPU Inference}: Giảm encoding latency xuống $< 10$ms (optional).
+  \item \textbf{Singleton Pattern}: Share model instance giữa Search, Reranking, Fallback.
+  \item \textbf{Pre-computed Embeddings}: Product embeddings được tính trước, chỉ load at startup.
+\end{enumerate}
+
+% ===================================================================
+\subsubsection*{MLOps Considerations}
+% ===================================================================
+
+\paragraph{Embedding Versioning.}
+
+Vietnamese Embedding vectors được version cùng với model artifacts:
+\begin{verbatim}
+data/processed/content_based_embeddings/
+|-- product_embeddings.pt       # Tensor [N, 1024]
+|-- embedding_metadata.json     # Version, data_hash, git_commit
+\end{verbatim}
+
+Khi sản phẩm mới được thêm vào catalog:
+\begin{enumerate}
+  \item Generate embedding cho new items (batch encoding).
+  \item Update search index (rebuild hoặc incremental add).
+  \item Bump version in metadata.
+\end{enumerate}
+
+\paragraph{Index Rebuild Trigger.}
+
+Index cần rebuild khi:
+\begin{itemize}
+  \item New products added: $|\mathcal{I}_{\text{new}}| > 100$.
+  \item Vietnamese Embedding model updated: embedding space thay đổi.
+  \item Periodic refresh: weekly (đảm bảo consistency).
+\end{itemize}
+
+\paragraph{Monitoring Metrics.}
+
+\begin{itemize}
+  \item \textbf{Query Latency}: P50, P95, P99 cho encoding + search steps.
+  \item \textbf{Cache Hit Rate}: Percentage of cached query embeddings.
+  \item \textbf{Zero-Result Rate}: Queries returning empty results (cần investigation).
+  \item \textbf{Click-Through Rate}: (Online metric) Relevance của search results.
+\end{itemize}
+
+% ===================================================================
+\subsubsection*{Kết nối với kiến trúc tổng thể}
+% ===================================================================
+
+Smart Search tích hợp với các thành phần khác như sau:
+
+\textbf{Với Serving (mục 5.1):}
+\begin{itemize}
+  \item Share \texttt{VietnameseEmbeddingLoader} instance (load Vietnamese Embedding một lần at startup).
+  \item Share item metadata cho attribute filtering.
+  \item Sử dụng chung routing logic (trainable vs cold-start).
+\end{itemize}
+
+\textbf{Với Hybrid Reranking (mục 5.2):}
+\begin{itemize}
+  \item Gọi \texttt{compute\_user\_profile()} để personalize search results (nếu cần).
+  \item Share normalized item embeddings $\mathbf{e}_i \in \mathbb{R}^{1024}$.
+  \item Có thể apply diversity constraint cho search results.
+\end{itemize}
+
+\textbf{Integration Pattern:}
+
+\begin{verbatim}
+[API: /search] --> [SmartSearchService]
+                        |
+                        +--> [QueryEncoder] (Vietnamese Embedding)
+                        |        |
+                        |        +--> [LRU Cache] (1000 queries)
+                        |
+                        +--> [SearchIndex] (exact/FAISS)
+                        |        |
+                        |        +--> [Metadata Indices] (brand, category, price)
+                        |
+                        +--> [Multi-Signal Reranker]
+                        |
+                        +--> [SearchResponse]
+\end{verbatim}
+
+\textbf{Shared Resources Summary}:
+\begin{itemize}
+  \item \textbf{Vietnamese Embedding model}: Dùng chung giữa Search, Reranking, và Content-based fallback.
+  \item \textbf{Product embeddings}: Pre-computed tensor [2,200 × 1024], loaded once.
+  \item \textbf{Metadata cache}: In-memory lookup cho product info.
+\end{itemize}
+
+Cả 3 module (Serving, Reranking, Search) được thiết kế để share resources hiệu quả,
+giảm memory footprint và đảm bảo consistency trong user experience.

@@ -1,0 +1,273 @@
+\documentclass[a4paper]{report}
+\usepackage[utf8]{vietnam}
+\usepackage{float}
+% Tôi giữ nguyên lề của bạn, nếu muốn đổi, bạn có thể thay thế
+\usepackage[left=2.5cm,right=2.5cm,top=2cm,bottom=2cm]{geometry}
+\setlength{\parindent}{0pt}
+\usepackage{graphicx}
+\usepackage{xcolor}
+\usepackage{tikz}
+\usepackage{pgfplots}
+\pgfplotsset{compat=1.18}
+
+\usepackage{amssymb}
+\usepackage[hidelinks]{hyperref}
+
+\usepackage{scrextend}
+
+\usepackage{etoolbox} % Gói để "vá" lệnh
+\patchcmd{\chapter}{\clearpage}{}{}{} % Tìm \clearpage trong \chapter và xóa nó đi
+\usepackage{titlesec} % Gói này đã có, dùng để tùy chỉnh tiêu đề
+\usepackage{tabularx}
+\raggedbottom % xóa dòng thừa
+
+\usepackage{tgtermes}  % Để có font Times New Roman
+\usepackage{newtxmath} % Font toán học Times
+\usepackage{setspace} % Để giãn dòng 1.5
+\usepackage{amsmath}% Gói toán học (nên có)
+\usepackage{enumitem} % Tùy chỉnh danh sách (nên có)
+
+% ================================================
+
+\makeatletter
+\setcounter{secnumdepth}{3} %
+
+% Cỡ chữ 13pt (từ file của bạn)
+\changefontsizes{13pt}
+
+% === KÍCH HOẠT GIÃN DÒNG 1.5 ===
+\onehalfspacing
+% ================================
+
+% === ĐỊNH DẠNG LẠI TIÊU ĐỀ CHƯƠNG (BỎ CHỮ "Chương") ===
+\titleformat{\chapter}[hang]
+{\normalfont\Large\bfseries}% <--- SỬA DÒNG NÀY (THÊM \bfseries)
+{\thechapter.}
+{1em}
+{\bfseries}
+
+% *** THÊM DÒNG NÀY ĐỂ GIẢM KHOẢNG CÁCH DỌC ***
+\titlespacing*{\chapter}{0pt}{30pt}{15pt}
+
+
+\usetikzlibrary{calc}
+
+\begin{document}
+
+% --- TRANG BÌA (Giữ nguyên từ file của bạn) ---
+% --- TRANG BÌA ĐÃ ĐƯỢC IN ĐẬM ---
+\begin{titlepage}
+\begin{tikzpicture}[remember picture,overlay,inner sep=0,outer sep=0]
+\draw[blue!70!black,line width=4pt] ([xshift=-1.5cm,yshift=-2cm]current page.north east) coordinate (A)--([xshift=1.5cm,yshift=-2cm]current page.north west) coordinate(B)--([xshift=1.5cm,yshift=2cm]current page.south west) coordinate (C)--([xshift=-1.5cm,yshift=2cm]current page.south east) coordinate(D)--cycle;
+
+\draw ([yshift=0.5cm,xshift=-0.5cm]A)-- ([yshift=0.5cm,xshift=0.5cm]B)--
+([yshift=-0.5cm,xshift=0.5cm]B) --([yshift=-0.5cm,xshift=-0.5cm]B)--([yshift=0.5cm,xshift=-0.5cm]C)--([yshift=0.5cm,xshift=0.5cm]C)--([yshift=-0.5cm,xshift=0.5cm]C)-- ([yshift=-0.5cm,xshift=-0.5cm]D)--([yshift=0.5cm,xshift=0.5cm]D)--([yshift=0.5cm,xshift=0.5cm]D)--([yshift=0.5cm,xshift=0.5cm]A)--([yshift=-0.5cm,xshift=-0.5cm]A)--([yshift=0.5cm,xshift=-0.5cm]A);
+
+\draw ([yshift=-0.3cm,xshift=0.3cm]A)-- ([yshift=-0.3cm,xshift=-0.3cm]B)--
+([yshift=0.3cm,xshift=-0.3cm]B) --([yshift=0.3cm,xshift=0.3cm]B)--([yshift=-0.3cm,xshift=0.3cm]C)--([yshift=-0.3cm,xshift=-0.3cm]C)--([yshift=0.3cm,xshift=-0.3cm]C)-- ([yshift=0.3cm,xshift=0.3cm]D)--([yshift=0.3cm,xshift=0.3cm]D)--([yshift=-0.3cm,xshift=-0.3cm]D)--([yshift=0.3cm,xshift=-0.3cm]A)--([yshift=0.3cm,xshift=0.3cm]A)--([yshift=-0.3cm,xshift=0.3cm]A);
+
+\end{tikzpicture}
+\begin{center}
+\vspace{7pt}
+
+\textbf{TRƯỜNG ĐẠI HỌC KHOA HỌC TỰ NHIÊN }
+
+\vspace{6pt}
+% *** ĐÃ SỬA LỖI THỪA DẤU } ***
+\textbf{ĐẠI HỌC QUỐC GIA HÀ NỘI} % <--- SỬA LỖI THỪA DẤU } TẠI ĐÂY
+\end{center}
+\vspace{8pt}
+\begin{center}
+\includegraphics[scale=0.3]{image/VNU-HUS.jpg}
+
+\vspace{10pt}
+\fontsize{16pt}{17pt}\selectfont
+\textbf{BÁO CÁO CUỐI KÌ}
+\end{center}
+
+\vspace{10pt}
+
+% === BẠN XÓA 2 KHỐI CŨ VÀ THAY BẰNG KHỐI NÀY ===
+\begin{center}
+{\fontsize{17pt}{17pt}\selectfont \textbf{CHỦ ĐỀ}} \ 
+\end{center}
+
+\begin{center}
+{\fontsize{17pt}{17pt}\selectfont \textbf{\textit{GỢI Ý SẢN PHẨM SỮA RỬA MẶT}}}
+\end{center}
+% ================================================
+
+
+\vspace{5pt}
+% === BẮT ĐẦU KHỐI LÙI VÀO ===
+% Bạn có thể thay 2cm bằng 1cm, 3cm... tùy ý
+\begin{addmargin}{2cm} 
+
+\vspace{15pt}
+\textbf{GV bộ môn: Hoàng Anh Đức}
+
+\textbf{Môn học: MAT1206E  - Nhập môn trí tuệ nhân tạo}
+
+
+\textbf{Học kỳ: 1 - 2025 - 2026}
+\begin{center}
+Mai Huy Hoàng\\
+Vũ Quang Anh\\
+Vũ Khánh Nam\\
+Trịnh Thị Thu Huyền\\
+Đặng Chí Kiên
+\end{center}
+
+\end{addmargin}
+% === KẾT THÚC KHỐI LÙI VÀO ===
+
+
+\vspace{10pt}
+\begin{center}
+\textbf{Hà Nội, 2025}
+\end{center}
+\end{titlepage}
+
+% Trang thông tin dự án
+\clearpage
+\thispagestyle{empty}
+\begin{center}
+    {\LARGE \textbf{Thông tin Dự án}}\\[1.5em]
+    \parbox{0.85\textwidth}{
+        \textit{[Thông tin này cũng cần được ghi trong README.md của kho GitHub.]}
+    }
+    \\[2em]
+    \begin{tabular}{rl}
+        \textbf{Học phần:} & MAT1206E -- Nhập môn Trí tuệ Nhân tạo \\
+        \textbf{Học kỳ:} & Học kỳ 1, Năm học 2025-2026 \\
+        \textbf{Trường:} & VNU-HUS (Đại học Quốc gia Hà Nội -- Trường Đại học Khoa học Tự nhiên) \\
+        \textbf{Tên dự án:} & Hệ thống Gợi ý Sản phẩm Mỹ phẩm \\
+        \textbf{Ngày nộp:} & 30/11/2025 \\
+        \textbf{Giảng viên:} & Hoàng Anh Đức \\
+        \textbf{Báo cáo PDF:} & \href{https://github.com/viecomrec/blob/main/baocao/main.pdf}{Liên kết báo cáo PDF} \\
+        \textbf{Slide thuyết trình:} & \href{https://github.com/viecomrec/blob/main/baocao/slide/slide.pdf}{Liên kết slide thuyết trình} \\
+        \textbf{Kho GitHub:} & \url{https://github.com/viecomrec}
+    \end{tabular}
+    \\[2em]
+    {\Large \textbf{Thành viên nhóm}}\\[1em]
+    \begin{tabular}{|l|l|l|p{5cm}|}
+        \hline
+        \textbf{Họ tên} & \textbf{Mã sinh viên} & \textbf{Tên GitHub} & \textbf{Đóng góp} \\
+        \hline
+        Mai Huy Hoàng & 23001878 & Hoang-k68a3hus & Phát triển hệ thống, xử lí data, code hệ thống \\
+        \hline
+        Vũ Quang Anh & 23001831 & Quincy546 & Làm web \\
+        \hline
+        Vũ Khánh Nam & 23001907 & K68A4 & Chương 1, 2 \\
+        \hline
+        Trịnh Thị Thu Huyền & 23001889 & TrinhHuyen05 & Huấn luyện mô hình và đánh giá \\
+        \hline
+        Đặng Chí Kiên & 23001896 & K68A4 & Không \\
+        \hline
+    \end{tabular}
+\end{center}
+\clearpage
+
+% Lời cảm ơn
+\include{thanks}
+
+\listoffigures
+
+\listoftables
+
+\tableofcontents
+\clearpage
+
+
+
+
+
+\chapter{Giới thiệu}
+\input{introduce}
+
+
+% -----------------------------------------------------------------
+\chapter{Cơ sở lý thuyết}
+\input{theoretical_background}
+
+% -----------------------------------------------------------------
+\chapter{Chiến lược Dữ liệu và Phân khúc (Data Strategy)}
+
+    \input{data_preprocessing}
+  
+
+% -----------------------------------------------------------------
+\chapter{Huấn luyện Mô hình (Implementation Details)}
+\input{train_als}
+
+% -----------------------------------------------------------------
+\chapter{Hệ thống Serving và Hybrid Reranking}
+
+
+  \subsection{Kiến trúc Serving}
+    % Nội dung chi tiết được tách riêng để dễ bảo trì
+    \input{serving_architecture}
+  \subsection{Thuật toán Hybrid Reranking}
+    \input{hybrid_reranking}
+  \subsection{Smart Search Integration}
+    % Nội dung chi tiết được tách riêng để dễ bảo trì
+    \input{smart_search}
+
+% -----------------------------------------------------------------
+\chapter{Đánh giá và Thực nghiệm}
+
+% Nội dung chi tiết với kết quả thực nghiệm được tách riêng
+\input{evaluation}
+
+% -----------------------------------------------------------------
+\chapter{Vận hành và MLOps}
+
+  \subsection{Monitoring}
+    % Nội dung chi tiết được tách riêng để dễ bảo trì
+    \input{monitoring}
+  \subsection{Automation Pipeline}
+    % Nội dung chi tiết được tách riêng để dễ bảo trì
+    \input{automation_pipeline}
+\input{baocao/system_design_}
+
+% -----------------------------------------------------------------
+\chapter{Kết luận và Hướng phát triển}
+\input{conclusion}
+
+
+% ================================================
+% TÀI LIỆU THAM KHẢO
+% ================================================
+\begin{thebibliography}{99}
+
+% --- Sách Cơ sở lý thuyết ---
+\bibitem{ertel2017}
+W. Ertel, \textit{Introduction to Artificial Intelligence}, 2nd ed. Springer, 2017.
+
+\bibitem{mitchell1997}
+T. Mitchell, \textit{Machine Learning}. McGraw-Hill, 1997.
+
+% --- Thuật toán Gợi ý cốt lõi ---
+\bibitem{koren2009matrix}
+Y. Koren, R. Bell, and C. Volinsky, ``Matrix Factorization Techniques for Recommender Systems,'' \textit{Computer}, vol. 42, no. 8, pp. 30--37, 2009.
+
+\bibitem{hu2008collaborative}
+Y. Hu, Y. Koren, and C. Volinsky, ``Collaborative Filtering for Implicit Feedback Datasets,'' in \textit{Proc. IEEE ICDM}, 2008, pp. 263--272.
+
+\bibitem{rendle2009bpr}
+S. Rendle, C. Freudenthaler, Z. Gantner, and L. Schmidt-Thieme, ``BPR: Bayesian Personalized Ranking from Implicit Feedback,'' in \textit{Proc. UAI}, 2009, pp. 452--461.
+
+% --- Dataset (Cập nhật từ BibTeX bạn cung cấp) ---
+\bibitem{viecomrec2024}
+Q.-L. Tran, B. T. Nguyen, G. J. F. Jones, and C. Gurrin, ``ViEcomRec: A Dataset for Recommendation in Vietnamese E-Commerce,'' in \textit{Computational Data and Social Networks}, Singapore: Springer Nature Singapore, 2024, pp. 74--82.
+
+% --- Các mô hình BERT cụ thể dùng trong báo cáo ---
+\bibitem{visobert}
+5CD-AI, ``Vietnamese-Sentiment-visobert,'' Hugging Face Model Hub. [Online]. Available: \url{https://huggingface.co/5CD-AI/Vietnamese-Sentiment-visobert}. (Truy cập: 2025).
+
+\bibitem{vietnamese_embedding}
+AITeamVN, ``Vietnamese\_Embedding,'' Hugging Face Model Hub. [Online]. Available: \url{https://huggingface.co/AITeamVN/Vietnamese_Embedding}. (Truy cập: 2025).
+
+\end{thebibliography}
+
+\end{document}

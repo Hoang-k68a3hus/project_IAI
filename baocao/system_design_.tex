@@ -1,0 +1,625 @@
+\chapter{Thiết kế hệ thống và xử lý dữ liệu}
+
+\section{Kiến trúc tổng quan hệ thống}
+
+Hệ thống thương mại điện tử RabbitMart kết hợp dịch vụ gợi ý mỹ phẩm VieComRec được thiết kế theo mô hình \textbf{Client--Server} nhiều tầng, tích hợp thêm một \textbf{Recommender Service} chạy độc lập bằng Docker. Kiến trúc tổng thể tuân theo mô hình triển khai thực tế của các ứng dụng thương mại điện tử hiện đại:
+
+\begin{itemize}
+    \item \textbf{Frontend (Client Layer)}: Giao diện ReactJS 18 tương tác trực tiếp với người dùng, chạy trên cổng 3000.
+    \item \textbf{Backend (Service Layer)}: Máy chủ Node.js/Express xử lý nghiệp vụ, xác thực người dùng và kết nối database, chạy trên cổng 5000.
+    \item \textbf{Database Layer}: MongoDB 6.0 lưu trữ toàn bộ dữ liệu người dùng, sản phẩm, đơn hàng và lịch sử hành vi, chạy trên cổng 27017.
+    \item \textbf{Recommendation Layer (VieComRec)}: API gợi ý sản phẩm chuyên biệt sử dụng FastAPI, được triển khai dưới dạng Docker service độc lập, chạy trên cổng 8000.
+\end{itemize}
+
+Các thành phần giao tiếp qua các endpoint RESTful, trong đó Backend đóng vai trò \textit{API Gateway}, điều phối dữ liệu giữa Client, MongoDB và VieComRec API. Hệ thống hỗ trợ cả người dùng đã đăng nhập và khách vãng lai (guest users).
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.9\textwidth]{image/architecture_diagram.png}
+    \caption{Sơ đồ kiến trúc tổng quan hệ thống RabbitMart + VieComRec}
+\end{figure}
+
+\vspace{1em}
+
+\section{Các thành phần chi tiết}
+
+\subsection{Phân hệ Frontend (ReactJS)}
+
+Phân hệ Client được xây dựng theo kiến trúc SPA (Single Page Application) sử dụng React 18 nhằm tối ưu tốc độ tải trang và trải nghiệm người dùng.
+
+\subsubsection*{Công nghệ sử dụng}
+
+\begin{itemize}
+    \item \textbf{React 18.1.0}: Thư viện UI chính với hooks và functional components.
+    \item \textbf{Redux Toolkit 1.8.1}: Quản lý state toàn cục (authentication, products).
+    \item \textbf{React Router DOM 6.3.0}: Điều hướng SPA với các routes động.
+    \item \textbf{Axios 0.27.2}: HTTP client giao tiếp với Backend APIs.
+    \item \textbf{Framer Motion 6.3.3}: Animation và transitions cho UI.
+\end{itemize}
+
+\subsubsection*{Cấu trúc thư mục Frontend}
+
+\begin{verbatim}
+client/src/
+├── api/                    # API clients
+│   ├── index.js           # Backend API calls
+│   ├── viecomrec.js       # VieComRec API client
+│   └── BaseURLs.js        # Base URL configurations
+├── actions/               # Redux actions
+├── reducers/              # Redux reducers
+├── components/            # Reusable components
+│   ├── navigation/        # Navigation bar
+│   ├── product-card/      # Product display card
+│   ├── loading/           # Loading spinner
+│   └── pages/             # Pagination component
+├── pages/                 # Route pages
+│   ├── home/              # Trang chủ
+│   ├── products/          # Danh sách sản phẩm
+│   ├── product-detail/    # Chi tiết sản phẩm
+│   ├── cart/              # Giỏ hàng
+│   ├── checkout/          # Thanh toán
+│   ├── wishlist/          # Danh sách yêu thích
+│   ├── order/             # Lịch sử đơn hàng
+│   ├── authentication/    # Đăng nhập/Đăng ký
+│   └── admin/             # Quản trị viên
+└── shared/                # Assets, CSS chung
+\end{verbatim}
+
+\subsubsection*{Các chức năng chính}
+
+\begin{itemize}
+    \item \textbf{Trang chủ (Home)}: Hiển thị sản phẩm nổi bật với infinite scroll, tích hợp section ``Gợi ý dành cho bạn'' từ VieComRec API.
+    \item \textbf{Trang sản phẩm (Products)}: Hiển thị danh sách sản phẩm theo phân trang (20 sản phẩm/trang), hỗ trợ lọc theo danh mục và tìm kiếm semantic bằng AI.
+    \item \textbf{Chi tiết sản phẩm (ProductDetail)}: Hiển thị thông tin chi tiết, đánh giá, sản phẩm tương tự, hỗ trợ thêm giỏ hàng và wishlist.
+    \item \textbf{Giỏ hàng (Cart)}: Quản lý sản phẩm trong giỏ, lưu trữ theo user trong localStorage với key \texttt{cart\_\{userId\}}.
+    \item \textbf{Thanh toán (Checkout)}: Tích hợp Stripe payment gateway.
+    \item \textbf{Wishlist}: Yêu cầu đăng nhập, đồng bộ với MongoDB.
+    \item \textbf{Admin Panel}: Dashboard quản lý sản phẩm, đơn hàng, vận chuyển và AI Dashboard cho VieComRec.
+\end{itemize}
+
+\subsubsection*{VieComRec API Client}
+
+File \texttt{client/src/api/viecomrec.js} cung cấp các hàm gọi API gợi ý:
+
+\begin{verbatim}
+// Gợi ý sản phẩm cho user
+export const getRecommendations = async (userId, topk, excludeSeen);
+
+// Tìm kiếm semantic tiếng Việt
+export const semanticSearch = async (query, topk, filters);
+
+// Sản phẩm tương tự (CF-based)
+export const getSimilarItems = async (productId, topk);
+
+// Tìm kiếm theo lịch sử mua hàng
+export const getProfileBasedSearch = async (productHistory, topk);
+
+// Scheduler APIs
+export const getSchedulerStatus = async ();
+export const triggerTraining = async (modelType);
+export const getDriftStatus = async ();
+\end{verbatim}
+
+\subsubsection*{Luồng xử lý dữ liệu phía Client}
+
+\begin{enumerate}
+    \item Người dùng truy cập trang (Home/Products).
+    \item Component gọi \texttt{loadRecommendations()} với \texttt{user\_id} từ localStorage.
+    \item VieComRec API trả về danh sách \texttt{product\_id} với \texttt{score}.
+    \item Client gọi \texttt{POST /api/products/arr} để lấy thông tin đầy đủ từ MongoDB.
+    \item Merge dữ liệu VieComRec + MongoDB và render ProductCard.
+\end{enumerate}
+
+\subsection{Phân hệ Backend (Node.js/Express)}
+
+Đây là lớp trung gian chịu trách nhiệm xử lý nghiệp vụ, xác thực và giao tiếp với các dịch vụ khác.
+
+\subsubsection*{Công nghệ sử dụng}
+
+\begin{itemize}
+    \item \textbf{Node.js 16.x}: Runtime JavaScript server-side.
+    \item \textbf{Express 4.16.1}: Web framework RESTful API.
+    \item \textbf{Mongoose 6.3.3}: ODM cho MongoDB.
+    \item \textbf{JWT (jsonwebtoken 8.5.1)}: Xác thực người dùng với token.
+    \item \textbf{bcrypt 5.0.1}: Mã hoá mật khẩu.
+    \item \textbf{Stripe 9.6.0}: Payment gateway integration.
+    \item \textbf{Axios 0.27.2}: HTTP client gọi VieComRec API.
+\end{itemize}
+
+\subsubsection*{Cấu trúc API Routes}
+
+\begin{verbatim}
+server/
+├── index.js               # Entry point, Express app
+├── routes/
+│   ├── auth.js            # /api/auth - Authentication
+│   ├── products.js        # /api/products - Product CRUD
+│   ├── orders.js          # /api/orders - Order management
+│   ├── payments.js        # /api/payments - Stripe payments
+│   ├── shipping.js        # /api/shipping - Shipment tracking
+│   ├── recommend.js       # /api/recommend - VieComRec proxy
+│   ├── ingest.js          # /api/ingest - ML data ingestion
+│   └── notifications.js   # /api/notifications - Email
+├── controller/            # Business logic
+├── model/                 # Mongoose schemas
+├── middleware/
+│   └── auth.js            # JWT verification middleware
+├── services/
+│   └── BaseURLs.js        # Service URLs configuration
+└── utils/                 # Pagination, ID generation
+\end{verbatim}
+
+\subsubsection*{Chi tiết các API Endpoints}
+
+\textbf{Authentication API (/api/auth):}
+\begin{itemize}
+    \item \texttt{POST /register}: Đăng ký với bcrypt hash password.
+    \item \texttt{POST /login}: Đăng nhập, trả về JWT token.
+    \item \texttt{POST /verify}: Xác thực token hiện tại.
+    \item \texttt{POST /role}: Kiểm tra quyền ADMIN.
+    \item \texttt{POST /wishlist}: Lấy danh sách yêu thích.
+    \item \texttt{PATCH /wishlist}: Thêm/xóa sản phẩm khỏi wishlist.
+\end{itemize}
+
+\textbf{Products API (/api/products):}
+\begin{itemize}
+    \item \texttt{GET /}: Lấy sản phẩm theo trang (20/page), hỗ trợ filter \texttt{category}.
+    \item \texttt{GET /recommendations}: Random 2 categories với mỗi category 5 sản phẩm.
+    \item \texttt{GET /:id}: Chi tiết sản phẩm theo \texttt{product\_id}.
+    \item \texttt{GET /:id/reviews}: Đánh giá sản phẩm với pagination và sorting.
+    \item \texttt{GET /:id/similar}: Sản phẩm tương tự theo category/brand/type.
+    \item \texttt{POST /cart}: Validate giỏ hàng trước thanh toán.
+    \item \texttt{POST /arr}: Lấy nhiều sản phẩm theo array \texttt{product\_id}.
+    \item \texttt{PATCH /updateQuantity}: Cập nhật stock sau khi mua.
+\end{itemize}
+
+\textbf{Orders API (/api/orders):}
+\begin{itemize}
+    \item \texttt{POST /}: Tạo đơn hàng mới, tự động gọi Products, Shipping, Notifications.
+    \item \texttt{GET /:id}: Chi tiết đơn hàng.
+    \item \texttt{GET /}: Danh sách đơn hàng (Admin only).
+    \item \texttt{PATCH /:id}: Cập nhật trạng thái (CREATED/PROCESSING/FULFILLED/CANCELLED).
+\end{itemize}
+
+\textbf{Recommendation Proxy (/api/recommend):}
+\begin{itemize}
+    \item \texttt{POST /}: Proxy đến VieComRec \texttt{/recommend}.
+    \item \texttt{POST /search}: Proxy đến VieComRec \texttt{/search} (semantic search).
+    \item \texttt{POST /similar}: Proxy đến VieComRec \texttt{/similar\_items}.
+    \item \texttt{GET /health}: Kiểm tra trạng thái VieComRec service.
+\end{itemize}
+
+\textbf{Ingest API (/api/ingest) - Gửi dữ liệu đến ML:}
+\begin{itemize}
+    \item \texttt{POST /purchase}: Gửi thông tin mua hàng để cập nhật CF model.
+    \item \texttt{POST /review}: Gửi đánh giá để cập nhật content-based model.
+    \item \texttt{POST /batch}: Batch ingest nhiều purchases và reviews.
+    \item \texttt{GET /stats}: Thống kê ingestion (Admin only).
+\end{itemize}
+
+\subsubsection*{Xử lý Fallback khi VieComRec không khả dụng}
+
+Backend implement graceful degradation khi VieComRec API không phản hồi:
+
+\begin{verbatim}
+// server/routes/recommend.js
+router.post("/", async (req, res) => {
+  try {
+    const response = await axios.post(
+      `${VIECOMREC_BASEURL}/recommend`, {...}
+    );
+    res.json(response.data);
+  } catch (error) {
+    // Fallback to mock data if VieComRec is unavailable
+    const mockRecommendations = [
+      { rank: 1, product_id: 101, score: 0.91, ... },
+      ...
+    ];
+    res.json({
+      recommendations: mockRecommendations,
+      is_fallback: true,
+      fallback_method: "mock_data"
+    });
+  }
+});
+\end{verbatim}
+
+\subsection{Phân hệ Recommender Service (VieComRec)}
+
+VieComRec là dịch vụ gợi ý mỹ phẩm được triển khai bằng FastAPI và Docker Compose. Hệ thống hỗ trợ:
+
+\begin{itemize}
+    \item \textbf{Collaborative Filtering (ALS/BPR)}: Gợi ý dựa trên hành vi người dùng tương tự.
+    \item \textbf{Content-based (PhoBERT embeddings)}: Gợi ý dựa trên nội dung sản phẩm với semantic search tiếng Việt.
+    \item \textbf{Hybrid reranking}: Kết hợp CF score + content score + popularity để tối ưu độ chính xác.
+\end{itemize}
+
+\subsubsection*{API Endpoints}
+
+Chi tiết về các API endpoints, SLA targets, và luồng xử lý được trình bày đầy đủ tại \textbf{Chương 5 - Kiến trúc Serving}.
+Các endpoint chính bao gồm: \texttt{/recommend}, \texttt{/search}, \texttt{/similar\_items}, 
+\texttt{/scheduler/status}, và \texttt{/health}.
+
+Hệ thống hỗ trợ tối ưu hoá cho tình huống \textbf{cold-start user} (người dùng mới) bằng cách fallback sang content-based + popularity ranking khi user không có đủ lịch sử tương tác.
+
+\subsection{Phân hệ Database (MongoDB)}
+
+MongoDB 6.0 được triển khai qua Docker với cấu hình:
+
+\begin{verbatim}
+# docker-compose.yml
+services:
+  mongodb:
+    image: mongo:6.0
+    container_name: cosmetic_mongodb
+    ports:
+      - "27017:27017"
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: admin
+      MONGO_INITDB_ROOT_PASSWORD: password123
+      MONGO_INITDB_DATABASE: cosmetic_db
+    volumes:
+      - mongodb_data:/data/db
+      - ./mongo-init.js:/docker-entrypoint-initdb.d/mongo-init.js:ro
+\end{verbatim}
+
+MongoDB quản lý toàn bộ dữ liệu phi cấu trúc của hệ thống, đặc biệt phù hợp cho thương mại điện tử vì:
+
+\begin{itemize}
+    \item Cấu trúc linh hoạt (Document-based) phù hợp với dữ liệu sản phẩm đa dạng.
+    \item Hỗ trợ scale-out với replica sets.
+    \item Tương thích hoàn hảo với Node.js thông qua Mongoose ODM.
+    \item Hỗ trợ text search index cho tìm kiếm sản phẩm.
+\end{itemize}
+
+\subsection{Luồng tương tác tổng thể}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.85\textwidth]{image/data_flow_diagram.png}
+    \caption{Luồng tương tác hệ thống}
+\end{figure}
+
+\begin{enumerate}
+    \item Người dùng truy cập trang sản phẩm hoặc tìm kiếm.
+    \item React Client gửi request đến Express Backend.
+    \item Backend xử lý:
+    \begin{itemize}
+        \item Nếu cần data sản phẩm: truy vấn MongoDB.
+        \item Nếu cần gợi ý: gọi VieComRec API với \texttt{user\_id}.
+    \end{itemize}
+    \item VieComRec truy xuất model (ALS/PhoBERT), tính toán và trả về danh sách \texttt{product\_id} với \texttt{score}.
+    \item Backend truy vấn MongoDB để enrich thông tin sản phẩm (image, price, stock).
+    \item Backend merge dữ liệu và trả về JSON response cho Frontend.
+    \item Frontend render ProductCard với thông tin đầy đủ.
+\end{enumerate}
+
+\vspace{1em}
+
+\section{Thiết kế xử lý dữ liệu}
+
+\subsection{Nguồn dữ liệu}
+
+Dữ liệu của hệ thống bao gồm:
+
+\begin{itemize}
+    \item \textbf{Dữ liệu sản phẩm}: Hơn 40 trường thông tin bao gồm tên, thương hiệu, danh mục, giá, ảnh, mô tả, thành phần, rating breakdown (1-5 sao), số lượng bán.
+    \item \textbf{Dữ liệu hành vi người dùng}: Xem sản phẩm, thêm giỏ hàng, thêm wishlist, mua hàng với timestamp.
+    \item \textbf{Dữ liệu đánh giá (Reviews)}: Rating, comment, product quality, variation đã mua.
+    \item \textbf{Dữ liệu đơn hàng}: Lịch sử mua với trạng thái, địa chỉ giao hàng, timestamp.
+\end{itemize}
+
+Các dữ liệu này được lưu trong MongoDB và được VieComRec trích xuất thông qua Ingest API trong quá trình chạy batch offline (training).
+
+\subsection{Tổ chức dữ liệu trong MongoDB}
+
+\subsubsection*{Collection Users}
+
+\begin{verbatim}
+// server/model/Users.js
+const UsersSchema = new Schema({
+    first_name: { type: String },
+    last_name: { type: String },
+    email: { type: String, required: true },      // Unique key
+    password: { type: String, required: true },   // bcrypt hashed
+    role: { 
+        type: String, 
+        enum: ['USER', 'ADMIN'], 
+        default: "USER" 
+    },
+    phone: { type: String },
+    wishlist: { type: Array }  // Array of product_id
+});
+\end{verbatim}
+
+\subsubsection*{Collection Products}
+
+\begin{verbatim}
+// server/model/Products.js
+const productSchema = new Schema({
+    product_id: { type: Number, unique: true, required: true },
+    shop_id: { type: Number, default: 0 },
+    name: String,
+    product_name: String,
+    brand: String,
+    price: { type: Number, default: 0 },
+    
+    // Rating & Sales statistics
+    avg_rating: { type: Number, default: 0 },
+    avg_star: { type: Number, default: 0 },
+    num_sold: { type: Number, default: 0 },
+    num_rating: { type: Number, default: 0 },
+    
+    // Rating breakdown (for display)
+    is_5_star: { type: Number, default: 0 },
+    is_4_star: { type: Number, default: 0 },
+    is_3_star: { type: Number, default: 0 },
+    is_2_star: { type: Number, default: 0 },
+    is_1_star: { type: Number, default: 0 },
+    
+    // Product details
+    category: String,
+    type: String,
+    skin_kind: String,
+    skin_type: String,
+    origin: String,
+    capacity: String,
+    
+    // Content for semantic search
+    description: String,
+    processed_description: String,  // Preprocessed for PhoBERT
+    ingredient: String,
+    feature: String,
+    
+    // Image path
+    image: String,
+    stock: { type: Number, default: 100 }
+}, { timestamps: true });
+
+// Text search index
+productSchema.index({ 
+    name: 'text', 
+    product_name: 'text', 
+    brand: 'text', 
+    description: 'text' 
+});
+\end{verbatim}
+
+\subsubsection*{Collection Orders}
+
+\begin{verbatim}
+// server/model/Orders.js
+const orderSchema = mongoose.Schema({
+    order_id: { type: String, required: true, unique: true },
+    user_id: { 
+        type: mongoose.Schema.Types.ObjectId, 
+        ref: 'Users' 
+    },
+    name: { first: String, last: String },
+    email: { type: String },
+    phone_number: { type: String },
+    address: {
+        country: String,
+        city: String,
+        area: String,
+        street: String,
+        building_number: String,
+        floor: String,
+        apartment_number: String
+    },
+    ordered_at: { type: Date, default: Date.now },
+    status: {
+        type: String,
+        enum: ['CREATED', 'PROCESSING', 'FULFILLED', 'CANCELLED'],
+        default: 'CREATED'
+    },
+    products: { type: Array, required: true, default: [] },
+    total: { type: Number, required: true },
+    
+    // ML tracking
+    ingested: { type: Boolean, default: false },
+    ingest_timestamp: { type: Date }
+});
+\end{verbatim}
+
+\subsubsection*{Collection Reviews}
+
+\begin{verbatim}
+// server/model/Reviews.js
+const reviewSchema = new Schema({
+    review_id: { type: Number },
+    user_id: { type: Number, required: true, index: true },
+    product_id: { type: Number, required: true, index: true },
+    rating: { type: Number, required: true, min: 1, max: 5 },
+    product_quality: { type: Number, min: 1, max: 5 },
+    
+    comment: String,
+    processed_comment: String,  // Preprocessed for sentiment
+    
+    product_name: String,
+    variation: String,
+    cmt_date: { type: Date },
+    created_at: { type: Date, default: Date.now }
+}, { timestamps: true });
+
+// Compound indexes for efficient queries
+reviewSchema.index({ user_id: 1, product_id: 1 });
+reviewSchema.index({ product_id: 1, rating: -1 });
+\end{verbatim}
+
+\vspace{1em}
+
+\section{Tích hợp VieComRec vào hệ thống}
+
+\subsection{Bước 1: Cấu hình kết nối}
+
+Cấu hình Base URL trong cả Backend và Frontend:
+
+\begin{verbatim}
+// server/services/BaseURLs.js
+export const VIECOMREC_BASEURL = process.env.VIECOMREC_API 
+    || 'http://localhost:8000';
+
+// client/src/api/BaseURLs.js
+export const VIECOMREC_BASEURL = 
+    process.env.REACT_APP_VIECOMREC_URL || "http://localhost:8000";
+\end{verbatim}
+
+\subsection{Bước 2: Khởi chạy VieComRec bằng Docker}
+
+\begin{verbatim}
+# Build và chạy VieComRec container
+docker-compose build
+docker-compose up -d
+
+# Kiểm tra health
+curl http://localhost:8000/health
+\end{verbatim}
+
+API mặc định chạy tại: \texttt{http://localhost:8000}
+
+\subsection{Bước 3: Backend Proxy Implementation}
+
+\begin{verbatim}
+// server/routes/recommend.js
+router.post("/", async (req, res) => {
+  const { user_id, topk = 10, exclude_seen = true, 
+          filter_params = null } = req.body;
+
+  try {
+    const response = await axios.post(
+      `${VIECOMREC_BASEURL}/recommend`, 
+      { user_id, topk, exclude_seen, filter_params, rerank: true }
+    );
+    res.json(response.data);
+  } catch (error) {
+    // Fallback handling...
+  }
+});
+\end{verbatim}
+
+\subsection{Bước 4: Frontend gọi và hiển thị}
+
+\begin{verbatim}
+// client/src/pages/home/Home.js
+const loadRecommendations = async () => {
+  const profile = JSON.parse(localStorage.getItem("profile"));
+  const userId = profile?.user?.user_id || 1;
+
+  // 1. Gọi VieComRec API
+  const result = await getRecommendations(userId, 10, true);
+
+  if (result && result.recommendations) {
+    // 2. Lấy product_ids
+    const productIds = result.recommendations.map(
+      item => item.product_id
+    );
+    
+    // 3. Enrich từ MongoDB
+    const productsRes = await axios.post(
+      `${PRODUCTS_BASEURL}/arr`, { arr: productIds }
+    );
+    
+    // 4. Merge data
+    const mapped = result.recommendations.map((item) => {
+      const dbProduct = productMap[item.product_id] || {};
+      return {
+        product_id: item.product_id,
+        name: dbProduct.name || item.product_name,
+        price: dbProduct.price || item.price,
+        image: dbProduct.image,
+        score: item.score,
+        ...
+      };
+    });
+    setRecommendations(mapped);
+  }
+};
+\end{verbatim}
+
+\subsection{Bước 5: Ingest dữ liệu mới cho ML}
+
+Khi user mua hàng hoặc đánh giá, Backend gửi dữ liệu đến VieComRec:
+
+\begin{verbatim}
+// server/controller/me/Ingest.js
+export const ingestPurchase = async (req, res) => {
+  const { user_id, product_id, quantity, order_id } = req.body;
+
+  // Send to VieComRec API
+  await axios.post(`${VIECOMREC_API}/ingest/purchase`, {
+    user_id,
+    product_id: parseInt(product_id),
+    quantity: parseInt(quantity) || 1,
+    timestamp: new Date().toISOString()
+  });
+
+  // Mark order as ingested
+  await Order.findOneAndUpdate(
+    { order_id },
+    { ingested: true, ingest_timestamp: new Date() }
+  );
+};
+\end{verbatim}
+
+\vspace{1em}
+
+\section{Sơ đồ luồng dữ liệu chi tiết}
+
+\subsection{Luồng gợi ý sản phẩm (Recommendation Flow)}
+
+\begin{enumerate}
+    \item User mở trang Home hoặc Products.
+    \item React gọi \texttt{getRecommendations(userId, 10, true)}.
+    \item VieComRec kiểm tra:
+    \begin{itemize}
+        \item Nếu user có $\geq 2$ lịch sử mua hàng $\rightarrow$ sử dụng Collaborative Filtering (ALS).
+        \item Nếu user mới (cold-start) $\rightarrow$ fallback content-based + popularity ranking.
+    \end{itemize}
+    \item VieComRec thực hiện Hybrid Reranking: \\
+    $final\_score = \alpha \cdot CF\_score + \beta \cdot content\_score + \gamma \cdot popularity$
+    \item Trả về danh sách \texttt{[\{product\_id, score, rank\}]}.
+    \item Backend/Frontend gọi \texttt{POST /api/products/arr} để lấy thông tin từ MongoDB.
+    \item Frontend hiển thị section ``Gợi ý dành cho bạn''.
+\end{enumerate}
+
+\subsection{Luồng tìm kiếm ngữ nghĩa (Semantic Search Flow)}
+
+\begin{enumerate}
+    \item User nhập query tìm kiếm (ví dụ: ``serum vitamin c cho da dầu'').
+    \item React gọi \texttt{semanticSearch(query, 20)}.
+    \item VieComRec:
+    \begin{itemize}
+        \item Encode query bằng PhoBERT $\rightarrow$ query\_embedding.
+        \item Tính cosine similarity với product\_embeddings đã index.
+        \item Rerank theo relevance + popularity.
+    \end{itemize}
+    \item Trả về danh sách với \texttt{semantic\_score} và \texttt{final\_score}.
+    \item Frontend hiển thị với badge ``Tìm kiếm thông minh bằng AI''.
+\end{enumerate}
+
+\subsection{Luồng mua hàng và cập nhật ML}
+
+\begin{enumerate}
+    \item User thêm sản phẩm vào giỏ và thanh toán.
+    \item Backend tạo Order, gọi Stripe, cập nhật stock.
+    \item Backend gọi \texttt{POST /api/ingest/purchase} với dữ liệu đơn hàng.
+    \item VieComRec nhận và lưu interaction mới.
+    \item Scheduler tự động retrain model định kỳ (hoặc khi detect drift).
+\end{enumerate}
+
+\vspace{1em}
+
+\section{Tổng kết}
+
+Hệ thống RabbitMart + VieComRec được thiết kế với các đặc điểm nổi bật:
+
+\begin{itemize}
+    \item \textbf{Kiến trúc Microservices}: Tách biệt Frontend, Backend, Database và ML Service để dễ dàng scale và maintain.
+    \item \textbf{RESTful API chuẩn}: Giao tiếp thống nhất giữa các services qua HTTP/JSON.
+    \item \textbf{Graceful Degradation}: Hệ thống vẫn hoạt động khi VieComRec không khả dụng nhờ fallback logic.
+    \item \textbf{Real-time Data Ingestion}: Dữ liệu mua hàng và đánh giá được gửi ngay đến ML để cập nhật model.
+    \item \textbf{Cold-start Handling}: Người dùng mới vẫn nhận được gợi ý qua content-based + popularity.
+    \item \textbf{Semantic Search tiếng Việt}: PhoBERT cho phép tìm kiếm theo ngữ nghĩa, hiểu context query.
+    \item \textbf{Admin Dashboard}: Quản lý toàn diện sản phẩm, đơn hàng và monitoring ML model.
+\end{itemize}

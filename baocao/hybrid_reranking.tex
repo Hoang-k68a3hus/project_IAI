@@ -1,0 +1,379 @@
+% -----------------------------------------------------------------
+% 5.2 Hybrid Reranking
+%
+% Văn phong: Nhà nghiên cứu Toán ứng dụng - chính xác, notation nhất quán,
+% định nghĩa rõ ràng, trình bày có cấu trúc
+
+\textit{Hybrid Reranking là bước xử lý cuối cùng trong pipeline gợi ý, có nhiệm vụ
+tích hợp nhiều tín hiệu đánh giá (signals) để tối ưu đồng thời relevance và diversity
+của kết quả trả về. Phần này trình bày hình thức toán học của cơ chế reranking,
+bao gồm định nghĩa các signals, hàm scoring, và phương pháp đa dạng hóa.}
+
+% ===================================================================
+\subsubsection*{Ký hiệu và định nghĩa cơ bản}
+% ===================================================================
+
+Cho trước:
+\begin{itemize}
+  \item $\mathcal{U}$: tập người dùng, $|\mathcal{U}| \approx 300{,}000$.
+  \item $\mathcal{I}$: tập sản phẩm, $|\mathcal{I}| \approx 2{,}200$.
+  \item $\mathcal{H}_u \subseteq \mathcal{I}$: tập sản phẩm user $u$ đã tương tác (lịch sử).
+  \item $\mathcal{C}_u \subseteq \mathcal{I} \setminus \mathcal{H}_u$: tập candidates từ CF hoặc Fallback (mục 5.1).
+\end{itemize}
+
+\begin{definition}[Trainable User]
+User $u$ được gọi là \textbf{trainable} nếu thỏa mãn:
+\[
+  |\mathcal{H}_u| \geq 2 \quad \text{và} \quad \exists\, i \in \mathcal{H}_u: r_{ui} \geq \theta_{\text{pos}}
+\]
+với $\theta_{\text{pos}} = 4$ là ngưỡng positive interaction. Ký hiệu tập trainable users là $\mathcal{U}_{\text{train}}$.
+\end{definition}
+
+\begin{definition}[Cold-Start User]
+User $u \in \mathcal{U} \setminus \mathcal{U}_{\text{train}}$ được gọi là \textbf{cold-start user}.
+\end{definition}
+
+Với $|\mathcal{U}_{\text{train}}| \approx 26{,}000$ (chiếm 8.6\%), ta có phân hoạch
+$\mathcal{U} = \mathcal{U}_{\text{train}} \sqcup \mathcal{U}_{\text{cold}}$.
+
+% ===================================================================
+\subsubsection*{Định nghĩa các Signals}
+% ===================================================================
+
+Hybrid Reranking tích hợp 4 tín hiệu độc lập. Mỗi signal được chuẩn hóa về đoạn $[0, 1]$.
+
+\paragraph{Signal 1: CF Score ($s_{\text{cf}}$).}
+
+Cho $u \in \mathcal{U}_{\text{train}}$ với embedding $\mathbf{u} \in \mathbb{R}^d$
+và item $i$ với embedding $\mathbf{v}_i \in \mathbb{R}^d$:
+\[
+  \hat{r}_{ui} = \mathbf{u}^\top \mathbf{v}_i
+\]
+
+Điểm CF được chuẩn hóa min-max:
+\[
+  s_{\text{cf}}(u, i) = \frac{\hat{r}_{ui} - r_{\min}}{r_{\max} - r_{\min}} \in [0, 1]
+\]
+trong đó $r_{\min}, r_{\max}$ được xác định trước từ training set hoặc lấy từ metadata
+(\texttt{score\_range} trong model artifacts).
+
+Cho cold-start users ($u \in \mathcal{U}_{\text{cold}}$): $s_{\text{cf}}(u, i) = 0, \forall i$.
+
+\paragraph{Signal 2: Content Score ($s_{\text{content}}$).}
+
+Mỗi sản phẩm $i$ được biểu diễn bởi \textbf{Vietnamese Embedding} 
+(\texttt{AITeamVN/Vietnamese\_Embedding}) $\mathbf{e}_i \in \mathbb{R}^{1024}$,
+đã được chuẩn hóa L2: $\|\mathbf{e}_i\|_2 = 1$.
+
+\textit{Lưu ý}: Sự phân biệt giữa Vietnamese Embedding (1024d) và ViSoBERT (768d)
+được trình bày chi tiết tại \textbf{mục 3.0.3.4}.
+
+User profile embedding được tính bằng một trong ba strategies:
+\[
+  \mathbf{e}_u^{(\text{mean})} = \frac{1}{|\mathcal{H}_u|} \sum_{i \in \mathcal{H}_u} \mathbf{e}_i
+\]
+\[
+  \mathbf{e}_u^{(\text{weighted})} = \sum_{i \in \mathcal{H}_u} \alpha_i \mathbf{e}_i, \quad
+  \alpha_i = \frac{r_{ui}}{\sum_{j \in \mathcal{H}_u} r_{uj}}
+\]
+\[
+  \mathbf{e}_u^{(\text{max})} = \max_{i \in \mathcal{H}_u} \mathbf{e}_i \quad \text{(element-wise max)}
+\]
+
+Sau đó chuẩn hóa: $\tilde{\mathbf{e}}_u = \mathbf{e}_u / \|\mathbf{e}_u\|_2$.
+Implementation hiện tại sử dụng \texttt{weighted\_mean} với trọng số theo rating.
+
+Điểm content là cosine similarity:
+\[
+  s_{\text{content}}(u, i) = \cos(\tilde{\mathbf{e}}_u, \mathbf{e}_i) 
+  = \tilde{\mathbf{e}}_u^\top \mathbf{e}_i \in [-1, 1]
+\]
+
+Rescale về $[0, 1]$:
+\[
+  s_{\text{content}}^{*}(u, i) = \frac{s_{\text{content}}(u, i) + 1}{2}
+\]
+
+Cho users với $\mathcal{H}_u = \emptyset$: $s_{\text{content}}^{*}(u, i) = 0.5$ (neutral).
+
+\paragraph{Signal 3: Popularity Score ($s_{\text{pop}}$).}
+
+Điểm popularity đo mức độ phổ biến của sản phẩm, độc lập với user:
+\[
+  s_{\text{pop}}(i) = \frac{\log(1 + \texttt{num\_sold}_i)}{\max_{j \in \mathcal{I}} \log(1 + \texttt{num\_sold}_j)}
+\]
+
+Logarithm được sử dụng để giảm ảnh hưởng của outliers (sản phẩm bán chạy cực kỳ).
+Kết quả đã nằm trong $[0, 1]$ do định nghĩa.
+
+\paragraph{Signal 4: Quality Score ($s_{\text{quality}}$).}
+
+Điểm quality kết hợp rating trung bình và số lượng reviews:
+\[
+  s_{\text{quality}}(i) = \beta \cdot \frac{\bar{r}_i - 1}{4} + (1 - \beta) \cdot \frac{\log(1 + n_i)}{\max_j \log(1 + n_j)}
+\]
+trong đó:
+\begin{itemize}
+  \item $\bar{r}_i \in [1, 5]$: rating trung bình của item $i$.
+  \item $n_i$: số lượng reviews của item $i$.
+  \item $\beta \in [0, 1]$: trọng số cân bằng giữa rating và review count (mặc định $\beta = 0.6$).
+\end{itemize}
+
+Số hạng đầu chuẩn hóa rating về $[0, 1]$; số hạng sau đo độ tin cậy thống kê.
+
+% ===================================================================
+\subsubsection*{Hàm Hybrid Scoring}
+% ===================================================================
+
+\begin{definition}[Hybrid Score Function]
+Cho user $u$ và item $i \in \mathcal{C}_u$, điểm hybrid được định nghĩa:
+\[
+  S(u, i) = w_{\text{cf}} \cdot s_{\text{cf}}(u, i) 
+          + w_{\text{content}} \cdot s_{\text{content}}^{*}(u, i)
+          + w_{\text{pop}} \cdot s_{\text{pop}}(i)
+          + w_{\text{quality}} \cdot s_{\text{quality}}(i)
+\]
+trong đó vector trọng số $\mathbf{w} = (w_{\text{cf}}, w_{\text{content}}, w_{\text{pop}}, w_{\text{quality}})^\top$
+thỏa mãn:
+\[
+  \mathbf{w} \geq \mathbf{0}, \quad \|\mathbf{w}\|_1 = 1
+\]
+\end{definition}
+
+Kết quả: $S(u, i) \in [0, 1]$ do mỗi signal đã được chuẩn hóa và $\|\mathbf{w}\|_1 = 1$.
+
+\paragraph{Segment-Specific Weight Vectors.}
+
+Do sự khác biệt về độ tin cậy của CF signal giữa hai segments, áp dụng weight vectors riêng:
+
+\textbf{Trainable Users} ($u \in \mathcal{U}_{\text{train}}$, chiếm $\sim$8.6\% traffic):
+\[
+  \mathbf{w}^{(\text{train})} = (0.30, 0.40, 0.20, 0.10)^\top
+\]
+Content được ưu tiên hơn CF ($w_{\text{content}} > w_{\text{cf}}$) do:
+\begin{itemize}
+  \item Vietnamese Embedding (1024 dim) capture ngữ nghĩa tiếng Việt tốt hơn.
+  \item CF embeddings (64 dim) bị hạn chế bởi sparsity ($\sim$1.23 interactions/user).
+  \item Đây là \textbf{content-first strategy} phù hợp với dữ liệu cosmetics Việt Nam.
+\end{itemize}
+
+\textbf{Cold-Start Users} ($u \in \mathcal{U}_{\text{cold}}$, chiếm $\sim$91.4\% traffic):
+\[
+  \mathbf{w}^{(\text{cold})} = (0, 0.60, 0.30, 0.10)^\top
+\]
+CF bị vô hiệu hóa ($w_{\text{cf}} = 0$) vì không có embeddings. Content chiếm 60\% để 
+tận dụng Vietnamese Embedding similarity. Popularity (30\%) đảm bảo items được gợi ý 
+là những sản phẩm đã được thị trường verify.
+
+\paragraph{Biểu diễn ma trận.}
+
+Cho batch of users và fixed candidate set, scoring có thể vectorized:
+\[
+  \mathbf{S} = W \cdot 
+  \begin{pmatrix}
+    \mathbf{s}_{\text{cf}} \\
+    \mathbf{s}_{\text{content}} \\
+    \mathbf{s}_{\text{pop}} \\
+    \mathbf{s}_{\text{quality}}
+  \end{pmatrix}
+  \in \mathbb{R}^{|B| \times |\mathcal{C}|}
+\]
+trong đó $B$ là batch users, $W \in \mathbb{R}^{|B| \times 4}$ chứa weight vectors
+(mỗi hàng là $\mathbf{w}^{(\text{train})}$ hoặc $\mathbf{w}^{(\text{cold})}$ tùy segment).
+
+% ===================================================================
+\subsubsection*{Đa dạng hóa kết quả (Diversity)}
+% ===================================================================
+
+Chỉ tối ưu relevance ($S(u, i)$) có thể dẫn đến filter bubble: top-$K$ items quá tương đồng nhau.
+Hệ thống áp dụng diversity constraint qua thuật toán greedy re-selection.
+
+\begin{definition}[Intra-List Diversity]
+Cho danh sách gợi ý $\mathcal{R} = \{i_1, \dots, i_K\}$, độ đa dạng được đo bằng:
+\[
+  \text{ILD}(\mathcal{R}) = \frac{2}{K(K-1)} \sum_{j < k} \big(1 - \cos(\mathbf{e}_{i_j}, \mathbf{e}_{i_k})\big)
+\]
+Giá trị cao cho thấy các items trong list có nội dung đa dạng.
+\end{definition}
+
+\paragraph{Maximal Marginal Relevance (MMR).}
+
+Để cân bằng relevance và diversity, sử dụng MMR criterion:
+\[
+  i^{*} = \argmax_{i \in \mathcal{C} \setminus \mathcal{R}} 
+  \Big[ \lambda \cdot S(u, i) - (1 - \lambda) \cdot \max_{j \in \mathcal{R}} \cos(\mathbf{e}_i, \mathbf{e}_j) \Big]
+\]
+trong đó:
+\begin{itemize}
+  \item $\lambda \in [0, 1]$: trade-off parameter (mặc định $\lambda = 0.7$, ưu tiên relevance).
+  \item Số hạng đầu: relevance score.
+  \item Số hạng sau: penalty cho similarity với items đã chọn.
+\end{itemize}
+
+\paragraph{Thuật toán Greedy MMR.}
+
+\begin{enumerate}
+  \item Khởi tạo: $\mathcal{R} \leftarrow \emptyset$.
+  \item Chọn item đầu tiên: $i_1 = \argmax_{i \in \mathcal{C}} S(u, i)$, thêm vào $\mathcal{R}$.
+  \item Lặp $K - 1$ lần: chọn $i^{*}$ theo MMR criterion, thêm vào $\mathcal{R}$.
+  \item Trả về $\mathcal{R} = \{i_1, \dots, i_K\}$.
+\end{enumerate}
+
+Complexity: $O(K \cdot |\mathcal{C}| \cdot d)$ với $d = 1024$ (Vietnamese Embedding dimension).
+
+\paragraph{Configuration từ \texttt{rerank\_config.yaml}.}
+\begin{itemize}
+  \item \texttt{diversity\_enabled}: \texttt{true} (mặc định bật).
+  \item \texttt{diversity\_penalty}: $\gamma = 0.10$ (penalty cho similarity).
+  \item \texttt{diversity\_threshold}: $\tau = 0.85$ (chỉ penalize nếu $\cos > \tau$).
+  \item Candidate pool: $|\mathcal{C}| \approx 100$ items để MMR có đủ lựa chọn.
+\end{itemize}
+
+\textbf{Điều chỉnh MMR với threshold}:
+\[
+  i^{*} = \argmax_{i \in \mathcal{C} \setminus \mathcal{R}} 
+  \Big[ S(u, i) - \gamma \cdot \mathbbm{1}\big[\max_{j \in \mathcal{R}} \cos(\mathbf{e}_i, \mathbf{e}_j) > \tau\big] \Big]
+\]
+Chỉ áp dụng penalty khi có item quá tương đồng (cosine $> 0.85$), tránh penalize không cần thiết.
+
+% ===================================================================
+\subsubsection*{Position Bias Correction (Optional)}
+% ===================================================================
+
+Trong thực tế, items ở vị trí cao hơn nhận được nhiều clicks hơn do position bias.
+Để học được true relevance, cần correction.
+
+\begin{definition}[Position Bias Model]
+Giả sử probability user click item tại position $k$:
+\[
+  P(\text{click} \mid u, i, k) = P(\text{examine} \mid k) \cdot P(\text{click} \mid u, i, \text{examined})
+\]
+trong đó $P(\text{examine} \mid k)$ giảm theo $k$ (position bias).
+\end{definition}
+
+\paragraph{Inverse Propensity Scoring (IPS).}
+
+Để debias, áp dụng trọng số nghịch đảo:
+\[
+  w_k = \frac{1}{P(\text{examine} \mid k)} \approx k^{\gamma}
+\]
+với $\gamma \in [0.5, 1.5]$ được estimate từ randomization experiments.
+
+\textbf{Lưu ý}: Feature này là optional và chưa được implement trong phiên bản hiện tại.
+Được thiết kế để tích hợp khi có đủ click-through data từ production.
+
+% ===================================================================
+\subsubsection*{Pipeline tổng hợp}
+% ===================================================================
+
+Tóm tắt luồng xử lý Hybrid Reranking:
+
+\begin{verbatim}
+Input: user u, candidates C_u (from Serving, mục 5.1)
+       rerank_config: {weights, diversity, K}
+
+1. Compute signals:
+   s_cf[i]      <- CF score (or 0 if cold-start)
+   s_content[i] <- Cosine(user_profile, item_embedding)
+                   # user_profile via 'weighted_mean' strategy
+   s_pop[i]     <- log-normalized popularity from num_sold_time
+   s_quality[i] <- 0.6*rating_norm + 0.4*review_confidence
+
+2. Select weight vector based on user segment:
+   if u in U_train:  # ~8.6% traffic
+       w <- (0.30, 0.40, 0.20, 0.10)
+   else:             # ~91.4% traffic (cold-start)
+       w <- (0.00, 0.60, 0.30, 0.10)
+
+3. Compute hybrid scores:
+   S[i] <- w · [s_cf[i], s_content[i], s_pop[i], s_quality[i]]
+
+4. Diversity-aware selection:
+   if diversity_enabled and max_cos(i, R) > 0.85:
+       S[i] <- S[i] - 0.10  # penalty
+   R <- TopK(S, K)
+
+Output: R = {i_1, ..., i_K} với scores S(u, i_k)
+\end{verbatim}
+
+% ===================================================================
+\subsubsection*{Tính chất toán học}
+% ===================================================================
+
+\begin{proposition}[Boundedness]
+Với mọi $u \in \mathcal{U}$ và $i \in \mathcal{I}$: $S(u, i) \in [0, 1]$.
+\end{proposition}
+\begin{proof}
+Do mỗi signal $s_* \in [0, 1]$ và $\|\mathbf{w}\|_1 = 1$ với $\mathbf{w} \geq \mathbf{0}$,
+ta có $S(u, i) = \sum_k w_k s_k(u, i) \leq \sum_k w_k = 1$ và $S(u, i) \geq 0$.
+\end{proof}
+
+\begin{proposition}[Monotonicity]
+Nếu $s_k(u, i) \geq s_k(u, j)$ với mọi $k$ và tồn tại $k_0$ sao cho
+$s_{k_0}(u, i) > s_{k_0}(u, j)$, thì $S(u, i) > S(u, j)$.
+\end{proposition}
+\begin{proof}
+Từ định nghĩa và $w_{k_0} > 0$.
+\end{proof}
+
+\begin{proposition}[Smooth Transition]
+Khi user $u$ chuyển từ cold-start sang trainable (do tích lũy đủ interactions),
+sự thay đổi weight vector được kiểm soát:
+\[
+  \|\mathbf{w}^{(\text{train})} - \mathbf{w}^{(\text{cold})}\|_2 
+  = \|(0.30, -0.20, -0.10, 0)^\top\|_2 
+  = \sqrt{0.09 + 0.04 + 0.01} \approx 0.374
+\]
+Giá trị này nhỏ ($< 0.5$) đảm bảo transition mượt mà khi user tích lũy tương tác.
+\end{proposition}
+
+\paragraph{Traffic Distribution Analysis.}
+
+Với phân bố users hiện tại:
+\begin{itemize}
+  \item $|\mathcal{U}_{\text{train}}| \approx 26{,}000$ (8.6\%): Hybrid scoring đầy đủ 4 signals.
+  \item $|\mathcal{U}_{\text{cold}}| \approx 274{,}000$ (91.4\%): Content-first với 3 signals.
+\end{itemize}
+
+Expected latency (per request):
+\begin{itemize}
+  \item Trainable path: $\sim$80ms (CF scoring + content + reranking).
+  \item Cold-start path: $\sim$150ms (content similarity + fallback + reranking).
+\end{itemize}
+
+\textbf{Bottleneck analysis}: Cold-start path chiếm 91.4\% traffic nhưng có latency cao hơn.
+Vietnamese Embedding similarity là bước tốn thời gian nhất do $d = 1024$.
+
+% ===================================================================
+\subsubsection*{Kết nối với kiến trúc tổng thể}
+% ===================================================================
+
+Hybrid Reranking nhận input từ hai nguồn (mục 5.1):
+\begin{itemize}
+  \item \textbf{CF Path}: Candidates đã có CF scores, reranking bổ sung content/popularity.
+  \item \textbf{Fallback Path}: Candidates chỉ có content scores, reranking cân bằng với popularity/quality.
+\end{itemize}
+
+Output của Reranking cũng được sử dụng cho Smart Search (mục 5.3):
+khi user search và filter, kết quả search được re-score bằng cùng hybrid function
+để đảm bảo consistency giữa browsing và searching experience.
+
+Shared components:
+\begin{itemize}
+  \item \textbf{Vietnamese Embedding} (1024 dim): dùng cho cả $s_{\text{content}}$ và diversity measurement.
+  \item \textbf{Item metadata}: dùng cho $s_{\text{pop}}$ (từ \texttt{num\_sold\_time}) 
+        và $s_{\text{quality}}$ (từ \texttt{avg\_star}, \texttt{review\_count}).
+  \item \textbf{Normalization ranges}: lấy từ \texttt{data\_stats.json} để đảm bảo 
+        consistent scaling giữa training và serving.
+  \item \textbf{Caching}: pre-computed embeddings và similarities được cache cho Search layer.
+\end{itemize}
+
+\textbf{Tổng kết pipeline embeddings}:
+\[
+\text{Data Layer} \xrightarrow[\text{(768 dim)}]{\text{ViSoBERT}} \texttt{comment\_quality\_score}
+\xrightarrow{\text{confidence}} \text{ALS Training}
+\]
+\[
+\text{Serving Layer} \xrightarrow[\text{(1024 dim)}]{\text{Vietnamese Embedding}} 
+\text{Content Score} + \text{Diversity} + \text{Search}
+\]

@@ -1,0 +1,424 @@
+% -----------------------------------------------------------------
+% 5.1 Kiến trúc Serving
+%
+% Văn phong: Kỹ sư MLOps - dứt khoát, tập trung vào stability, scalability, performance
+% Tổ chức: Theo luồng dữ liệu Input → Processing → Output
+
+\textit{Kiến trúc Serving chịu trách nhiệm chuyển đổi mô hình đã huấn luyện thành dịch vụ
+production-ready với ba yêu cầu bắt buộc: \textbf{độ trễ} $< 100$ms (P95),
+\textbf{tính sẵn sàng} $\geq 99.9\%$, và \textbf{throughput} $\geq 100$ req/s.
+Phần này trình bày kiến trúc end-to-end từ khi nhận request đến khi trả về recommendations.}
+
+\paragraph{Thống kê dữ liệu thực tế.}
+Hệ thống được thiết kế để phục vụ tập dữ liệu mỹ phẩm Việt Nam với khoảng 300,000 users,
+2,200 sản phẩm, và độ thưa dữ liệu cực kỳ cao. Thống kê chi tiết và phân khúc người dùng
+được trình bày tại \textbf{mục 3.0.2} và \textbf{Chương 6}.
+
+% ===================================================================
+\subsubsection*{Luồng dữ liệu tổng quan (Data Flow)}
+% ===================================================================
+
+Mỗi request đi qua 5 giai đoạn tuần tự với latency budget được phân bổ rõ ràng:
+
+\begin{figure}[H]
+    \centering
+    % Sử dụng font nhỏ hơn để dòng text dài không bị tràn lề
+    \footnotesize
+\begin{verbatim}
+[Client] --> [API Gateway] --> [User Router] --> [Scoring Engine] --> [Response]
+  Input         5ms               10ms             50-80ms             5ms
+\end{verbatim}
+    \caption{Phân rã độ trễ (Latency Breakdown) của một yêu cầu gợi ý.}
+    \label{fig:latency_breakdown}
+\end{figure}
+
+\begin{enumerate}
+  \item \textbf{API Gateway} (5ms): Validation, authentication, rate limiting.
+  \item \textbf{User Router} (10ms): Phân loại user segment, quyết định CF hoặc Fallback path.
+  \item \textbf{Scoring Engine} (50--80ms): Tính điểm CF hoặc content-based, áp dụng filters.
+  \item \textbf{Reranking} (tích hợp trong Scoring): Hybrid scoring nếu enabled.
+  \item \textbf{Response Assembly} (5ms): Enrich metadata, serialize JSON.
+\end{enumerate}
+
+Tổng latency budget: $\leq 100$ms. Hệ thống đảm bảo luôn trả về kết quả thông qua
+cơ chế multi-layer fallback được mô tả ở phần sau.
+
+% ===================================================================
+\subsubsection*{Kiến trúc phân tầng (Layered Architecture)}
+% ===================================================================
+
+Hệ thống được tổ chức thành 4 tầng với separation of concerns rõ ràng:
+
+\begin{verbatim}
+service/
+|-- api.py                # L1: API Layer - Entry point
+|-- recommender/          # L2: Business Logic Layer
+|   |-- loader.py         #     Data Access (Singleton)
+|   |-- recommender.py    #     Core Engine
+|   |-- fallback.py       #     Cold-start Handler
+|   |-- rerank.py         #     Hybrid Reranker
+|   +-- cache.py          #     Performance Optimization
+|-- search/               # L3: Search Layer (xem mục 5.3)
++-- config/               # L4: Configuration Layer
+\end{verbatim}
+
+\paragraph{Nguyên tắc thiết kế.}
+\begin{itemize}
+  \item \textbf{Single Responsibility}: Mỗi module xử lý đúng một concern.
+  \item \textbf{Dependency Injection}: Loader được inject vào Recommender, Fallback, Reranker.
+  \item \textbf{Fail-fast với graceful degradation}: Phát hiện lỗi sớm, fallback có kiểm soát.
+\end{itemize}
+
+% ===================================================================
+\subsubsection*{API Layer: FastAPI Service}
+% ===================================================================
+
+FastAPI được chọn làm framework chính với các đặc điểm sau:
+
+\begin{itemize}
+  \item \textbf{Async I/O}: Xử lý concurrent requests hiệu quả (non-blocking).
+  \item \textbf{Type Safety}: Pydantic validation đảm bảo input/output consistency.
+  \item \textbf{Auto-documentation}: OpenAPI spec tự động sinh cho integration testing.
+\end{itemize}
+
+\paragraph{Endpoints và SLA.}
+
+\begin{center}
+\begin{tabular}{|l|l|l|l|}
+\hline
+\textbf{Endpoint} & \textbf{Method} & \textbf{Latency Target} & \textbf{Mô tả} \\
+\hline
+\texttt{/health} & GET & $<$ 10ms & Health check, readiness probe \\
+\texttt{/recommend} & POST & $<$ 100ms & Single-user recommendation \\
+\texttt{/batch\_recommend} & POST & $<$ 500ms & Multi-user batch processing \\
+\texttt{/similar\_items} & POST & $<$ 50ms & Item-item similarity \\
+\texttt{/reload\_model} & POST & $<$ 5s & Hot-reload model từ registry \\
+\texttt{/search} & POST & $<$ 200ms & Semantic search (mục 5.3) \\
+\hline
+\end{tabular}
+\end{center}
+
+\paragraph{Lifecycle Management.}
+
+Service lifecycle được quản lý qua \texttt{lifespan} context manager:
+
+\begin{verbatim}
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # === STARTUP PHASE ===
+    recommender = CFRecommender(auto_load=True)
+    cache_manager = get_cache_manager()
+    await async_warmup(cache_manager)
+    search_service.initialize()
+    
+    yield  # === RUNNING PHASE ===
+    
+    # === SHUTDOWN PHASE ===
+    logger.info("Graceful shutdown initiated")
+\end{verbatim}
+
+Startup sequence đảm bảo:
+\begin{itemize}
+  \item Model $U$, $V$ được load vào memory trước khi nhận traffic.
+  \item Cache được warm-up với Top-50 popular items và pre-computed similarities.
+  \item Vietnamese Embedding model (\texttt{AITeamVN/Vietnamese\_Embedding}) được load sẵn (tránh latency 30s ở query đầu tiên).
+\end{itemize}
+
+\paragraph{Security Hardening.}
+
+Hệ thống áp dụng defense-in-depth với 4 lớp bảo vệ:
+\begin{enumerate}
+  \item \textbf{CORS Policy}: Whitelist origins trong production.
+  \item \textbf{Rate Limiting}: 100 req/s per IP (configurable).
+  \item \textbf{Request Size Limit}: Max 10MB body size.
+  \item \textbf{Security Headers}: HSTS, X-Frame-Options, X-Content-Type-Options.
+\end{enumerate}
+
+% ===================================================================
+\subsubsection*{Model Management: Hot-Reload và Registry}
+% ===================================================================
+
+Hệ thống hỗ trợ zero-downtime model updates thông qua hot-reload mechanism.
+
+\paragraph{Model Registry.}
+
+Registry là JSON file quản lý tất cả model versions:
+
+\begin{verbatim}
+{
+  "current_best": {
+    "model_id": "als_v2_20251127",
+    "path": "artifacts/cf/als/20251127/",
+    "ndcg@10": 0.342,
+    "recall@10": 0.285
+  },
+  "models": { ... }
+}
+\end{verbatim}
+
+\paragraph{Singleton Model Loader.}
+
+Class \texttt{CFModelLoader} được implement theo Singleton pattern để đảm bảo:
+\begin{itemize}
+  \item Chỉ một instance trong memory (tiết kiệm RAM).
+  \item Thread-safe access với \texttt{threading.Lock}.
+  \item Shared state giữa API, Recommender, và Reranker.
+\end{itemize}
+
+\begin{verbatim}
+class CFModelLoader:
+    _instance = None
+    _lock = threading.Lock()
+    
+    def __new__(cls, *args, **kwargs):
+        with cls._lock:
+            if cls._instance is None:
+                cls._instance = super().__new__(cls)
+            return cls._instance
+\end{verbatim}
+
+\paragraph{Hot-Reload Protocol.}
+
+Khi nhận request \texttt{POST /reload\_model}:
+\begin{enumerate}
+  \item \textbf{Check}: So sánh \texttt{registry.current\_best.model\_id} với model đang serve.
+  \item \textbf{Load}: Nếu khác, tải $U'$, $V'$, metadata từ path mới.
+  \item \textbf{Validate}: Verify matrix dimensions và score\_range.
+  \item \textbf{Swap}: Atomic replacement $(U, V) \leftarrow (U', V')$.
+  \item \textbf{Confirm}: Log model\_id mới, return success response.
+\end{enumerate}
+
+Điều kiện trigger reload:
+\[
+  \texttt{need\_reload} = \big(\texttt{registry.current\_best.model\_id} \neq \texttt{loader.current\_model\_id}\big)
+\]
+
+% ===================================================================
+\subsubsection*{User Segmentation Router}
+% ===================================================================
+
+Router là thành phần quyết định luồng xử lý dựa trên đặc điểm người dùng.
+Phân khúc người dùng chi tiết được trình bày tại \textbf{mục 3.0.2}.
+
+\paragraph{Định nghĩa User Segments.}
+
+Hệ thống sử dụng hai phân khúc người dùng với chiến lược xử lý khác nhau.
+Chi tiết về phân khúc, ngưỡng, và thống kê được trình bày tại \textbf{mục 3.0.2}.
+Tóm tắt logic routing:
+\begin{itemize}
+  \item \textbf{Trainable Users} ($|\mathcal{H}_u| \geq 2$ và có $\geq 1$ positive): CF Scoring $\rightarrow$ Hybrid Reranking
+  \item \textbf{Cold-Start Users} (ngược lại): Content-based $\rightarrow$ Popularity Blend
+\end{itemize}
+
+\paragraph{Routing Decision Function.}
+
+\begin{verbatim}
+def route_user(user_id: int) -> str:
+    is_trainable = loader.is_trainable_user(user_id)
+    return "CF_PATH" if is_trainable else "FALLBACK_PATH"
+\end{verbatim}
+
+Biểu diễn hình thức:
+\[
+  \texttt{path}(u) = 
+  \begin{cases}
+    \text{CF} & \text{nếu } |\mathcal{H}_u| \geq 2 \land \exists\, i \in \mathcal{H}_u: r_{ui} \geq 4 \\
+    \text{Fallback} & \text{ngược lại}
+  \end{cases}
+\]
+
+% ===================================================================
+\subsubsection*{CF Path: Scoring Pipeline cho Trainable Users}
+% ===================================================================
+
+Với trainable users đi qua CF path, pipeline xử lý gồm 6 bước:
+
+\paragraph{Bước 1: Index Mapping.}
+Ánh xạ user ID gốc sang CF matrix index:
+\[
+  u \xrightarrow{\texttt{trainable\_user\_mapping}} u_{\text{idx\_cf}}
+\]
+
+\paragraph{Bước 2: CF Scoring.}
+Điểm ưu tiên dự đoán (predicted preference score) cho item $i$ được định nghĩa là tích vô hướng:
+\[
+  \hat{r}_{ui} = \mathbf{u}_{u_{\text{idx\_cf}}}^\top \mathbf{v}_i, \quad \forall i \in \{1, \dots, |\mathcal{I}|\}
+\]
+trong đó $\mathbf{u} \in \mathbb{R}^{64}$ là user embedding (hàng tương ứng trong ma trận $U$),
+$\mathbf{v} \in \mathbb{R}^{64}$ là item embedding (hàng tương ứng trong ma trận $V$), với $|\mathcal{I}| \approx 2{,}200$.
+
+Implementation: Matrix-vector multiplication $\mathbf{u} \cdot V^\top$ với complexity $O(d \cdot |\mathcal{I}|) = O(64 \times 2{,}200)$.
+
+\paragraph{Bước 3: Seen-Item Filtering.}
+Để tránh gợi ý lại items đã mua, áp dụng masking:
+\[
+  \hat{r}_{ui} \leftarrow -\infty, \quad \forall i \in \mathcal{H}_u^{(\text{train})}
+\]
+Lưu ý: Chỉ filter train set để tránh data leakage khi evaluation.
+
+\paragraph{Bước 4: Attribute Filtering (Optional).}
+Nếu request có filter\_params (brand, category, price range), thu hẹp không gian ứng viên:
+\[
+  \hat{r}_{ui} \leftarrow -\infty, \quad \forall i \notin \mathcal{I}_{\mathcal{F}}
+\]
+trong đó $\mathcal{I}_{\mathcal{F}}$ là tập items thỏa mãn tất cả filter conditions.
+
+\paragraph{Bước 5: Top-K Selection.}
+Chọn $K$ items có score cao nhất:
+\[
+  \mathcal{C}_u = \operatorname*{arg\,topK}_{i \in \mathcal{I}} \hat{r}_{ui}
+\]
+Nếu reranking enabled: chọn $5K$ candidates để có đủ diversity cho reranking.
+
+\paragraph{Bước 6: Hybrid Reranking.}
+Áp dụng Hybrid Reranking (mục 5.2) để kết hợp CF score với content, popularity, quality signals.
+Output cuối cùng: top-$K$ recommendations.
+
+% ===================================================================
+\subsubsection*{Fallback Path: Content-based cho Cold-Start Users}
+% ===================================================================
+
+Với cold-start users (chiếm đa số traffic), đây là critical path cần tối ưu hiệu năng cao nhất.
+
+\paragraph{Bước 1: User History Retrieval.}
+Lấy lịch sử tương tác (nếu có): $\mathcal{H}_u = \{i_1, \dots, i_m\}$ với $m \in \{0, 1\}$.
+
+\paragraph{Bước 2: User Profile Construction.}
+Nếu $m \geq 1$, user profile embedding được định nghĩa là trung bình có trọng số của item embeddings
+(Sử dụng mô hình Vietnamese Embedding 1024 chiều như đã mô tả tại \textbf{Mục 3.0.4}).
+\[
+  \mathbf{e}_u = \sum_{k=1}^{m} \alpha_k \tilde{\mathbf{e}}_{i_k}, \quad
+  \tilde{\mathbf{e}}_u = \frac{\mathbf{e}_u}{\|\mathbf{e}_u\|_2}
+\]
+với $\mathbf{e}_{i_k} \in \mathbb{R}^{1024}$, $\alpha_k \geq 0$, $\sum_k \alpha_k = 1$ (uniform hoặc recency-weighted).
+Nếu $m = 0$ (new user): bỏ qua content scoring, chỉ dùng popularity.
+
+\paragraph{Bước 3: Content-based Scoring.}
+Điểm content-based được định nghĩa là cosine similarity giữa embeddings 1024 chiều
+(Sử dụng mô hình Vietnamese Embedding 1024 chiều như đã mô tả tại \textbf{Mục 3.0.4}):
+\[
+  s_{\text{content}}(u, i) = \cos(\tilde{\mathbf{e}}_u, \tilde{\mathbf{e}}_i) = \tilde{\mathbf{e}}_u^\top \tilde{\mathbf{e}}_i
+\]
+
+\paragraph{Bước 4: Popularity Scoring.}
+Điểm popularity được chuẩn hóa logarithmic từ số lượng bán:
+\[
+  s_{\text{pop}}(i) = \frac{\log(1 + \texttt{num\_sold}_i)}{\max_j \log(1 + \texttt{num\_sold}_j)} \in [0, 1]
+\]
+
+\paragraph{Bước 5: Hybrid Fallback Score.}
+Điểm tổng hợp là tổ hợp tuyến tính:
+\[
+  S_{\text{fallback}}(u, i) = w_{\text{content}} \cdot s_{\text{content}}(u, i) + w_{\text{pop}} \cdot s_{\text{pop}}(i)
+\]
+Giá trị mặc định: $w_{\text{content}} = 0.7$, $w_{\text{pop}} = 0.3$.
+Cho new users ($m=0$): $w_{\text{content}} = 0$, $w_{\text{pop}} = 1$.
+
+\paragraph{Bước 6: Top-K Selection.}
+\[
+  \mathcal{R}_u = \operatorname*{arg\,topK}_{i \in \mathcal{I}} S_{\text{fallback}}(u, i)
+\]
+
+% ===================================================================
+\subsubsection*{Performance Optimization}
+% ===================================================================
+
+\paragraph{LRU Caching Strategy.}
+Với đa số traffic qua fallback path (cold-start users), caching là yếu tố quyết định hiệu năng:
+\begin{itemize}
+  \item \textbf{Popular Items Cache}: Pre-compute Top-50 popular items với enriched metadata.
+  \item \textbf{User Profile Cache}: LRU cache cho computed user profiles (TTL: 1 hour).
+  \item \textbf{Similarity Cache}: Pre-compute $50 \times 50 = 2{,}500$ item-item similarities.
+\end{itemize}
+
+Cache warm-up tại startup:
+\begin{verbatim}
+warmup_stats = await async_warmup(cache_manager)
+# Result: popular_items=50, similarities=2500, duration=150ms
+\end{verbatim}
+
+\paragraph{Batch Processing.}
+Endpoint \texttt{/batch\_recommend} tối ưu multi-user requests bằng batch matrix multiplication:
+\[
+  \hat{R}_{\text{batch}} = U_{\text{batch}} \cdot V^\top \in \mathbb{R}^{b \times |\mathcal{I}|}
+\]
+trong đó $U_{\text{batch}} \in \mathbb{R}^{b \times 64}$ với $b$ là batch size, $|\mathcal{I}| \approx 2{,}200$.
+Complexity: $O(b \cdot d \cdot |\mathcal{I}|) = O(b \cdot 64 \cdot 2{,}200)$ --- hiệu quả hơn so với $b$ lần single-user scoring.
+
+% ===================================================================
+\subsubsection*{Fault Tolerance: Multi-Layer Fallback}
+% ===================================================================
+
+Hệ thống đảm bảo luôn trả về kết quả thông qua cascading fallback:
+\begin{enumerate}
+  \item \textbf{CF index miss}: $\rightarrow$ Fallback sang content-based.
+  \item \textbf{Vietnamese Embedding unavailable}: $\rightarrow$ Fallback sang popularity-only.
+  \item \textbf{No valid items after filtering}: $\rightarrow$ Bỏ qua filters, return popularity.
+  \item \textbf{Model not loaded}: $\rightarrow$ HTTP 503 Service Unavailable.
+\end{enumerate}
+
+Response luôn chứa observability metadata:
+\begin{verbatim}
+{
+  "user_id": 12345,
+  "recommendations": [...],
+  "is_fallback": true,
+  "fallback_method": "hybrid",
+  "latency_ms": 45.2,
+  "model_id": "als_v2_20251127"
+}
+\end{verbatim}
+
+% ===================================================================
+\subsubsection*{Monitoring và SLA Metrics}
+% ===================================================================
+
+\paragraph{Performance Metrics.}
+\begin{itemize}
+  \item \textbf{Latency quantiles}: P50, P90, P95, P99 cho mỗi endpoint.
+  \item \textbf{Throughput}: Requests/second, aggregated per minute.
+  \item \textbf{Error rate}: 4xx, 5xx responses per endpoint.
+\end{itemize}
+
+\paragraph{Business Metrics.}
+\begin{itemize}
+  \item \textbf{Fallback ratio}: $\frac{\text{\# fallback requests}}{\text{\# total requests}}$ (target: $\approx 91.4\%$).
+  \item \textbf{Rerank ratio}: Percentage of requests with reranking enabled.
+\end{itemize}
+
+\paragraph{SLA Targets.}
+\begin{center}
+\begin{tabular}{|l|l|l|}
+\hline
+\textbf{Metric} & \textbf{Target} & \textbf{Alert Threshold} \\
+\hline
+CF Path Latency (P95) & $<$ 50ms & $>$ 80ms \\
+Fallback Path Latency (P95) & $<$ 100ms & $>$ 150ms \\
+Throughput & $\geq$ 100 req/s & $<$ 50 req/s \\
+Error Rate & $<$ 0.1\% & $>$ 1\% \\
+Availability & $\geq$ 99.9\% & $<$ 99\% \\
+\hline
+\end{tabular}
+\end{center}
+
+% ===================================================================
+\subsubsection*{Kết nối với các thành phần khác}
+% ===================================================================
+
+Kiến trúc Serving là foundation cho 2 thành phần tiếp theo:
+\begin{itemize}
+  \item \textbf{Hybrid Reranking (mục 5.2)}: Nhận candidates từ CF/Fallback path,
+  áp dụng multi-signal scoring để tối ưu relevance và diversity.
+  \item \textbf{Smart Search (mục 5.3)}: Chia sẻ Vietnamese Embedding và caching infrastructure,
+  kết quả search được route qua cùng reranking pipeline.
+\end{itemize}
+
+Luồng integration:
+\begin{verbatim}
+[Serving: CF/Fallback] --> [Reranking: Multi-signal] --> [Response]
+                                    ^
+[Smart Search] ---------------------+
+\end{verbatim}
+
+Cả 3 thành phần chia sẻ: Vietnamese Embedding (load một lần, 1024 chiều), item metadata, 
+caching infrastructure, và monitoring pipeline.

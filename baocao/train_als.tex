@@ -1,0 +1,479 @@
+% -----------------------------------------------------------------
+% Huấn luyện Mô hình ALS với BERT Initialization
+%
+% Văn phong: Kỹ sư Học máy / Nhà nghiên cứu - Chính xác, có chiều sâu kỹ thuật
+% Nhấn mạnh: BERT Initialization như một cải tiến quan trọng
+
+
+\textit{Dựa trên Task 02 (Training Pipelines) và Task 04 (Model Registry).}
+
+% ===================================================================
+\subsection{Alternating Least Squares (ALS)}
+% ===================================================================
+
+Thuật toán Alternating Least Squares (ALS) là phương pháp phân rã ma trận (Matrix Factorization) \cite{koren2009matrix}
+phổ biến trong hệ thống gợi ý, đặc biệt hiệu quả với dữ liệu implicit feedback \cite{hu2008collaborative}.
+Phần này trình bày chi tiết quy trình huấn luyện ALS trong hệ thống, bao gồm cách xử lý
+đầu vào, chiến lược khởi tạo tham số (Parameter Initialization), và các kỹ thuật
+tối ưu cho bài toán dữ liệu thưa.
+
+% -------------------------------------------------------------------
+\subsubsection{Đầu vào: Ma trận Confidence thưa}
+% -------------------------------------------------------------------
+
+Đầu vào của ALS là một \textbf{ma trận thưa} (Sparse Matrix) được lưu trữ dưới định dạng
+\texttt{CSR} (Compressed Sparse Row). Khác với ma trận rating truyền thống chứa các giá trị
+discrete $\{1, 2, 3, 4, 5\}$, ma trận trong hệ thống này chứa \texttt{confidence\_score}
+--- một đại lượng liên tục phản ánh mức độ tin cậy của từng tương tác.
+
+\paragraph{Cách tính Confidence Score.}
+Giá trị confidence được tính từ bước tiền xử lý (Task 01) theo công thức:
+\[
+  c_{ui} = r_{ui} + q_{ui}
+\]
+trong đó:
+\begin{itemize}
+  \item $r_{ui} \in \{1, 2, 3, 4, 5\}$: Rating gốc của người dùng $u$ cho sản phẩm $i$.
+  \item $q_{ui} \in [0, 1]$: Điểm chất lượng bình luận (comment quality score),
+  được trích xuất từ nội dung văn bản sử dụng các tín hiệu ngữ nghĩa tiếng Việt
+  như độ dài, sự xuất hiện của từ khóa tích cực (``thấm nhanh'', ``hiệu quả'', ``mịn da''...).
+\end{itemize}
+
+Kết quả là $c_{ui} \in [1.0, 6.0]$, cho phép phân biệt giữa rating 5 sao ``chân thực''
+(kèm bình luận chi tiết, $c \approx 6$) và rating 5 sao ``trần trụi'' (không bình luận, $c = 5$).
+Sự phân biệt này đặc biệt quan trọng trong bối cảnh dữ liệu có \textbf{rating skew}
+($\approx 95\%$ là 5 sao), giúp mô hình học được tín hiệu tinh tế hơn.
+
+\paragraph{Đặc điểm Ma trận thưa.}
+\begin{itemize}
+  \item \textbf{Kích thước}: $|\mathcal{U}|_{\text{train}} \times |\mathcal{I}| \approx 25{,}700 \times 1{,}400$.
+  \item \textbf{Mật độ} (Density): $\approx 0.08\%$ --- cực kỳ thưa do chỉ huấn luyện trên
+  \textit{trainable users} (người dùng có $\geq 2$ tương tác).
+  \item \textbf{Số phần tử khác không} (nnz): $\approx 30{,}000$ tương tác.
+\end{itemize}
+
+Với mật độ thấp như vậy, việc khởi tạo tham số đóng vai trò then chốt để đảm bảo
+thuật toán hội tụ (convergence) đúng hướng thay vì bị ``trôi dạt'' (drift) trong
+không gian tiềm ẩn (latent space).
+
+% -------------------------------------------------------------------
+\subsubsection{Khởi tạo tham số: BERT Initialization (Đóng góp chính)}
+% -------------------------------------------------------------------
+
+Truyền thống, các thuật toán phân rã ma trận như ALS khởi tạo ma trận user factors $U$
+và item factors $V$ bằng \textbf{phân phối Gaussian ngẫu nhiên} (Random Gaussian Initialization)
+với $\mathcal{N}(0, 0.01)$. Cách tiếp cận này đơn giản nhưng bỏ qua hoàn toàn
+\textit{thông tin nội dung} (content features) của sản phẩm --- một nguồn tri thức
+sẵn có và phong phú.
+
+Hệ thống đề xuất một chiến lược cải tiến: \textbf{BERT Initialization} --- khởi tạo
+ma trận Item Factors $V$ từ các embedding ngữ nghĩa được trích xuất bởi mô hình
+ngôn ngữ pre-trained cho tiếng Việt.
+
+\textbf{Lưu ý quan trọng về thuật ngữ}: Trong các phần thực nghiệm và so sánh,
+mô hình được gọi là \textbf{BERT-ALS} thực chất là \textit{ALS với BERT Initialization}
+--- cùng thuật toán ALS nhưng sử dụng embedding ngữ nghĩa để khởi tạo thay vì
+khởi tạo ngẫu nhiên. BERT-ALS không phải là một thuật toán hoàn toàn mới,
+mà là một \textit{biến thể tối ưu hóa} của ALS tiêu chuẩn.
+
+\paragraph{Quy trình BERT Initialization.}
+
+\begin{enumerate}
+  \item \textbf{Trích xuất embedding}: Mỗi sản phẩm $i$ được biểu diễn bởi một chuỗi văn bản
+  kết hợp từ tên sản phẩm, thành phần, công dụng:
+  \[
+    t_i = \texttt{[CLS]} \oplus \text{name}_i \oplus \texttt{[SEP]} \oplus \text{ingredient}_i 
+          \oplus \texttt{[SEP]} \oplus \text{feature}_i
+  \]
+  Mô hình \texttt{vinai/phobert-base} encoder ánh xạ $t_i$ sang không gian 1024 chiều 
+  với mean pooling: $\mathbf{e}_i \in \mathbb{R}^{1024}$.
+  
+  \item \textbf{Chiếu xuống không gian CF} (Projection): 
+  
+  \textit{Vấn đề tương thích kích thước}: Vietnamese Embedding có $d_{\text{BERT}} = 1024$ chiều,
+  trong khi không gian latent factors của ALS được cấu hình với $d_{\text{CF}} = 64$ chiều.
+  Sự khác biệt này yêu cầu một bước chiếu (projection) bắt buộc.
+  
+  Sử dụng \texttt{TruncatedSVD} để giảm chiều:
+  \[
+    \tilde{\mathbf{e}}_i = \text{SVD}_{64}(\mathbf{e}_i), \quad
+    \mathbf{e}_i \in \mathbb{R}^{1024} \rightarrow \tilde{\mathbf{e}}_i \in \mathbb{R}^{64}
+  \]
+  Phương pháp SVD bảo toàn phương sai (explained variance $\approx 64.9\%$), giữ lại
+  các thành phần ngữ nghĩa quan trọng nhất. Mặc dù mất $\sim$35\% thông tin,
+  các chiều được giữ lại là những chiều có phương sai cao nhất --- tức là
+  các đặc trưng ngữ nghĩa phân biệt nhất giữa các sản phẩm.
+  
+  \item \textbf{Căn chỉnh} (Alignment): Do thứ tự sản phẩm trong BERT embeddings có thể khác
+  với ma trận CSR, cần căn chỉnh theo ánh xạ \texttt{item\_to\_idx}. Các sản phẩm
+  không có embedding BERT được khởi tạo bằng vector ngẫu nhiên từ phân phối
+  của các embedding đã match (để duy trì consistency trong không gian tiềm ẩn).
+  
+  \item \textbf{Gán làm Item Factors ban đầu}:
+  \[
+    V^{(0)} = \text{AlignedBERTEmbeddings} \in \mathbb{R}^{|\mathcal{I}| \times d}
+  \]
+  ALS sẽ fine-tune $V$ trong quá trình huấn luyện thay vì học từ đầu.
+\end{enumerate}
+
+\paragraph{Lưu ý về Mô hình Embedding.}
+BERT Initialization sử dụng \textbf{Vietnamese Embedding} (1024 chiều) cho product embeddings.
+Chi tiết về sự phân biệt với ViSoBERT (dùng cho sentiment analysis) được trình bày tại \textbf{mục 3.0.3.4}.
+
+\paragraph{Lợi ích của BERT Initialization.}
+
+\begin{enumerate}
+  \item \textbf{Hội tụ nhanh hơn} (Faster Convergence): Thay vì bắt đầu từ một điểm
+  ngẫu nhiên trong không gian tiềm ẩn, Item Factors khởi đầu đã mang ý nghĩa ngữ nghĩa.
+  Điều này giúp thuật toán ALS đạt được local optimum tốt hơn với ít iterations hơn
+  ($\sim 15$ iterations thay vì $20$--$30$).
+  
+  \item \textbf{Neo giữ ngữ nghĩa} (Semantic Anchoring) cho Cold Items: Đây là lợi ích
+  quan trọng nhất. Với các sản phẩm ít tương tác (cold items, $< 5$ interactions),
+  việc học embedding từ dữ liệu hành vi gần như không khả thi do thiếu tín hiệu.
+  Trong trường hợp khởi tạo ngẫu nhiên, vector của các cold items bị ``trôi dạt''
+  (drift) theo gradient từ các users thưa thớt, dẫn đến biểu diễn kém chất lượng.
+  
+  Với BERT Initialization, cold items được ``neo giữ'' vào không gian ngữ nghĩa:
+  một sản phẩm ``serum vitamin C dưỡng trắng'' sẽ có embedding gần với các sản phẩm
+  tương tự ngay từ đầu, bất kể nó có ít tương tác. Regularization cao ($\lambda = 0.1$)
+  được áp dụng để ngăn không cho các vector này bị kéo quá xa khỏi vị trí
+  khởi tạo có ý nghĩa.
+  
+  \item \textbf{Transfer Learning từ NLP sang CF}: BERT Initialization thực chất là
+  một dạng \textit{transfer learning} --- tri thức ngữ nghĩa học được từ corpus
+  tiếng Việt lớn (qua pre-training của PhoBERT) được chuyển giao sang bài toán
+  collaborative filtering. Điều này đặc biệt có giá trị khi dữ liệu tương tác thưa
+  nhưng dữ liệu văn bản mô tả sản phẩm phong phú.
+\end{enumerate}
+
+\paragraph{Đánh giá định lượng.}
+Kết quả thực nghiệm chi tiết so sánh BERT Initialization với Random Gaussian 
+được trình bày trong Phần Đánh giá (Bảng so sánh ALS vs BERT-ALS).
+
+\textbf{Trade-off Recall vs Coverage}: BERT Initialization mang lại cải thiện về 
+Recall@10 (+2.5\%) và NDCG@10 (+1.2\%) so với ALS tiêu chuẩn. Tuy nhiên,
+Coverage giảm đáng kể ($-63.4\%$, từ 58\% xuống 21\%). Điều này cho thấy:
+\begin{itemize}
+  \item BERT embeddings tạo ra \textit{semantic clustering} --- các sản phẩm có ngữ nghĩa
+  tương đồng được nhóm lại gần nhau trong không gian latent.
+  \item Ngay cả sau khi ALS fine-tune, ảnh hưởng của BERT Initialization vẫn rất mạnh mẽ.
+  \item Kết quả là mô hình tập trung vào một tập con sản phẩm có ngữ nghĩa gần nhau,
+  làm giảm khả năng \textit{exploration} (khám phá) vốn có của ALS với khởi tạo ngẫu nhiên.
+\end{itemize}
+
+\textbf{Khuyến nghị lựa chọn mô hình}:
+\begin{itemize}
+  \item \textbf{BERT-ALS}: Phù hợp cho scenarios ưu tiên accuracy (Recall cao).
+  \item \textbf{ALS tiêu chuẩn}: Phù hợp cho scenarios cần balance giữa accuracy và diversity.
+  \item \textbf{BPR}: Phù hợp cho scenarios ưu tiên coverage/diversity.
+\end{itemize}
+
+% -------------------------------------------------------------------
+\subsubsection{Cấu hình Hyperparameters}
+% -------------------------------------------------------------------
+
+Các siêu tham số (hyperparameters) được điều chỉnh phù hợp với đặc thù dữ liệu:
+
+\begin{center}
+\begin{tabular}{|l|c|l|}
+\hline
+\textbf{Tham số} & \textbf{Giá trị} & \textbf{Giải thích} \\
+\hline
+\texttt{factors} & 64 & Số chiều không gian tiềm ẩn \\
+\texttt{regularization} & 0.1 & L2 penalty --- cao hơn bình thường để \\
+& & anchor BERT embeddings cho sparse users \\
+\texttt{iterations} & 15 & Số vòng lặp ALS \\
+\texttt{alpha} & 5 & Confidence scaling --- thấp do \\
+& & confidence range $[1, 6]$ thay vì binary \\
+\texttt{random\_state} & 42 & Seed cho reproducibility \\
+\hline
+\end{tabular}
+\end{center}
+
+\paragraph{Lưu ý về Alpha.}
+Trong ALS cho implicit feedback, tham số $\alpha$ điều khiển mức độ ``tin tưởng''
+vào các tương tác quan sát được:
+\[
+  C_{ui} = 1 + \alpha \cdot c_{ui}
+\]
+Do hệ thống sử dụng confidence score trong khoảng $[1, 6]$ (đã có ý nghĩa mức độ tin cậy),
+$\alpha$ được đặt thấp ($\alpha = 5$) thay vì giá trị tiêu chuẩn ($\alpha = 40$)
+dùng cho dữ liệu binary.
+
+% -------------------------------------------------------------------
+\subsubsection{Quy trình Huấn luyện}
+% -------------------------------------------------------------------
+
+Thuật toán ALS tối ưu hàm mất mát Weighted Regularized Squared Error theo công thức
+đã trình bày tại \textbf{mục 2.3.2}. Quá trình huấn luyện luân phiên (alternating)
+giữa cập nhật ma trận $U$ (fix $V$) và ma trận $V$ (fix $U$) trong 15 iterations
+cho đến khi hội tụ.
+
+Thư viện \texttt{implicit} (C++ backend) được sử dụng để tăng tốc độ huấn luyện,
+đạt thời gian $\approx 4$--$5$ giây cho toàn bộ $25{,}700$ users $\times$ $1{,}400$ items.
+
+% -------------------------------------------------------------------
+\subsubsection{Lưu trữ Artifacts}
+% -------------------------------------------------------------------
+
+Sau khi huấn luyện, các artifacts được lưu vào Model Registry (Task 04):
+
+\begin{verbatim}
+artifacts/cf/als/v1_20251127/
+├── als_U.npy              # User factors (26000, 64)
+├── als_V.npy              # Item factors (2200, 64)
+├── als_params.json        # Hyperparameters
+├── als_metrics.json       # Recall@10, NDCG@10, baseline comparison
+└── als_metadata.json      # BERT init info, score_range, git commit
+\end{verbatim}
+
+\paragraph{Score Range cho Global Normalization.}
+File \texttt{metadata.json} chứa \texttt{score\_range} --- phân phối điểm CF
+trên validation set. Thông tin này được sử dụng trong Hybrid Reranking (mục 5.2)
+để chuẩn hóa CF scores về $[0, 1]$, đảm bảo so sánh công bằng với các signals khác.
+
+% ===================================================================
+\subsection{Bayesian Personalized Ranking (BPR)}
+% ===================================================================
+
+BPR (Bayesian Personalized Ranking) \cite{rendle2009bpr} là phương pháp học ranking theo cặp (pairwise ranking),
+được thiết kế đặc biệt cho bài toán gợi ý với implicit feedback. Thay vì dự đoán
+rating tuyệt đối như ALS, BPR tối ưu trực tiếp \textit{thứ hạng tương đối} giữa các items
+--- một mục tiêu phù hợp hơn với bản chất của bài toán gợi ý.
+
+% -------------------------------------------------------------------
+\subsubsection{Cơ sở lý thuyết}
+% -------------------------------------------------------------------
+
+Hệ thống áp dụng BPR (Bayesian Personalized Ranking) với hàm mục tiêu và công thức
+cập nhật SGD đã được trình bày chi tiết tại \textbf{mục 2.3.3}. Phần này tập trung
+vào cách code training pipeline thay vì lặp lại công thức toán học.
+
+% -------------------------------------------------------------------
+\subsubsection{Đầu vào: Bộ ba huấn luyện (Training Triplets)}
+% -------------------------------------------------------------------
+
+Đầu vào của BPR là tập các \textbf{bộ ba} $(u, i, j)$ trong đó:
+\begin{itemize}
+  \item $u \in \mathcal{U}_{\text{train}}$: Người dùng (chỉ trainable users).
+  \item $i \in \mathcal{I}_u^+$: Item ``positive'' --- sản phẩm user đã tương tác với $r_{ui} \geq 4$.
+  \item $j \in \mathcal{I} \setminus \mathcal{I}_u^+$: Item ``negative'' --- sản phẩm user chưa tương tác
+  hoặc đã đánh giá thấp.
+\end{itemize}
+
+\paragraph{Ý nghĩa.}
+Mỗi bộ ba $(u, i, j)$ mang thông tin: ``User $u$ thích sản phẩm $i$ hơn sản phẩm $j$''.
+Mục tiêu huấn luyện: học embeddings sao cho predicted score $\hat{r}_{ui} > \hat{r}_{uj}$.
+
+\paragraph{Số lượng mẫu.}
+Với mỗi positive pair $(u, i)$, hệ thống sinh ra \texttt{samples\_per\_positive} = 5 triplets
+(mỗi triplet với một negative $j$ khác nhau). Tổng số triplets mỗi epoch:
+\[
+  |D_S| = |\text{positive\_pairs}| \times 5 \approx 30{,}000 \times 5 = 150{,}000 \text{ triplets}
+\]
+
+% -------------------------------------------------------------------
+\subsubsection{Chiến lược Negative Sampling: Hard Negative Mining}
+% -------------------------------------------------------------------
+
+Chiến lược chọn mẫu âm (negative sampling) đóng vai trò \textit{quyết định} đến chất lượng
+của BPR. Chọn ngẫu nhiên hoàn toàn (uniform random) dẫn đến nhiều ``easy negatives'' ---
+các sản phẩm hoàn toàn không liên quan mà mô hình dễ dàng phân biệt,
+gradient gần 0 và không đóng góp gì cho quá trình học.
+
+Hệ thống áp dụng \textbf{Dual Hard Negative Mining} --- một chiến lược kết hợp
+hai nguồn hard negatives:
+
+\paragraph{Nguồn 1: Explicit Hard Negatives (từ rating thấp).}
+Các sản phẩm user đã mua \textbf{nhưng đánh giá thấp} ($r_{uj} \leq 3$):
+\[
+  \mathcal{H}_u^{\text{explicit}} = \{j \in \mathcal{I}_u : r_{uj} \leq 3\}
+\]
+Đây là tín hiệu mạnh nhất về ``không thích'' --- user đã trải nghiệm thực tế
+và bày tỏ sự không hài lòng. Tuy nhiên, nguồn này thường khan hiếm do
+rating skew (chỉ $\approx 5\%$ ratings $\leq 3$).
+
+\paragraph{Nguồn 2: Implicit Hard Negatives (từ popularity).}
+Các sản phẩm \textit{phổ biến} (Top-50 theo \texttt{num\_sold}) mà user \textbf{không} tương tác:
+\[
+  \mathcal{H}_u^{\text{implicit}} = \{j \in \text{Top50}_{\text{popular}} : j \notin \mathcal{I}_u\}
+\]
+Logic: ``Sản phẩm bán chạy nhưng bạn không quan tâm $\Rightarrow$ implicit negative signal''.
+Nguồn này phong phú hơn và bổ sung cho explicit negatives.
+
+\paragraph{Tỷ lệ mixing.}
+\[
+  p(\text{hard}) = 0.3, \quad p(\text{random}) = 0.7
+\]
+Với mỗi triplet, có 30\% xác suất chọn negative từ $\mathcal{H}_u = \mathcal{H}_u^{\text{explicit}} \cup \mathcal{H}_u^{\text{implicit}}$,
+và 70\% chọn ngẫu nhiên từ $\mathcal{I} \setminus \mathcal{I}_u^+$.
+
+Tỷ lệ 30/70 được chọn dựa trên thực nghiệm: quá nhiều hard negatives ($> 50\%$)
+gây unstable training, quá ít ($< 20\%$) không đủ informative.
+
+\paragraph{Fallback Strategy.}
+Với users không có hard negatives (không có rating $\leq 3$ và không có implicit negatives),
+hệ thống fallback về 100\% random sampling. Statistics:
+\begin{verbatim}
+mixer.stats = {
+    'hard_samples': 45000,      # 30% of 150K
+    'random_samples': 105000,   # 70% of 150K  
+    'fallback_to_random': 4100  # Users without hard negs
+}
+\end{verbatim}
+
+\paragraph{Lợi ích của Hard Negative Mining.}
+\begin{enumerate}
+  \item \textbf{Gradient informativeness}: Hard negatives nằm gần decision boundary,
+  tạo gradient lớn và có ý nghĩa. Easy negatives ($\hat{r}_{ui} \gg \hat{r}_{uj}$)
+  cho $\sigma(x_{uij}) \approx 1$, gradient $\approx 0$.
+  
+  \item \textbf{Học biên quyết định tinh tế}: Mô hình buộc phải học các đặc trưng
+  subtle để phân biệt ``sản phẩm user thích'' vs ``sản phẩm phổ biến nhưng user không thích''.
+  
+  \item \textbf{Giảm popularity bias}: Implicit hard negatives từ popular items
+  ngăn mô hình chỉ đơn giản gợi ý sản phẩm phổ biến cho tất cả users.
+  
+  \item \textbf{Tận dụng explicit feedback}: Ratings thấp ($\leq 3$) --- một nguồn
+  thông tin quý giá nhưng thường bị bỏ qua trong implicit systems --- được
+  khai thác như hard negatives.
+\end{enumerate}
+
+% -------------------------------------------------------------------
+\subsubsection{Quy trình huấn luyện: Stochastic Gradient Descent}
+% -------------------------------------------------------------------
+
+BPR sử dụng SGD (Stochastic Gradient Descent) với mini-batch updates để tối ưu
+log-likelihood của ranking. Công thức gradient và update rules đã được trình bày
+chi tiết tại \textbf{mục 2.3.3}. Phần này mô tả cài đặt thực tế trong code.
+
+\paragraph{Learning Rate Schedule.}
+Áp dụng exponential decay để ổn định quá trình hội tụ:
+với $\eta_0 = 0.05$ (initial learning rate), $\gamma = 0.9$ (decay factor), $T = 10$ (decay interval).
+
+% -------------------------------------------------------------------
+\subsubsection{Cấu hình Hyperparameters}
+% -------------------------------------------------------------------
+
+\begin{center}
+\begin{tabular}{|l|c|l|}
+\hline
+\textbf{Tham số} & \textbf{Giá trị} & \textbf{Giải thích} \\
+\hline
+\texttt{factors} & 64 & Số chiều embedding (match với ALS) \\
+\texttt{learning\_rate} & 0.05 & Learning rate ban đầu \\
+\texttt{regularization} & $10^{-4}$ & L2 penalty --- thấp hơn ALS do SGD \\
+\texttt{epochs} & 50 & Số epochs tối đa \\
+\texttt{samples\_per\_positive} & 5 & Số negatives mỗi positive \\
+\texttt{hard\_ratio} & 0.3 & Tỷ lệ hard negatives \\
+\texttt{batch\_size} & 4096 & Mini-batch size \\
+\texttt{lr\_decay} & 0.9 & Decay factor \\
+\texttt{lr\_decay\_every} & 10 & Decay mỗi 10 epochs \\
+\hline
+\end{tabular}
+\end{center}
+
+\paragraph{Khởi tạo Embeddings.}
+Khác với ALS sử dụng BERT Initialization, BPR khởi tạo cả $U$ và $V$ bằng
+\textbf{Random Gaussian} $\mathcal{N}(0, 0.01)$. Lý do: thực nghiệm cho thấy
+BERT Initialization không cải thiện đáng kể cho BPR (BPR học từ pairwise comparisons,
+ít phụ thuộc vào vị trí khởi tạo tuyệt đối như ALS).
+
+% -------------------------------------------------------------------
+\subsubsection{Early Stopping và Checkpointing}
+% -------------------------------------------------------------------
+
+\paragraph{Early Stopping.}
+Theo dõi Recall@10 trên validation set mỗi epoch. Dừng huấn luyện nếu không cải thiện
+sau \texttt{patience} = 5 epochs liên tiếp:
+\[
+  \texttt{stop} = \big( \text{Recall@10}_{t} \leq \max_{s < t} \text{Recall@10}_{s} \big) \text{ for 5 consecutive } t
+\]
+
+\paragraph{Checkpointing.}
+Lưu $U$, $V$, metadata mỗi 5 epochs vào \texttt{checkpoints/bpr/}:
+\begin{verbatim}
+checkpoints/bpr/
+├── bpr_U_epoch010.npy
+├── bpr_V_epoch010.npy
+├── checkpoint_epoch010.json
+└── ...
+\end{verbatim}
+
+Cho phép resume training từ checkpoint nếu bị interrupt, và rollback về best epoch
+sau khi early stopping.
+
+% -------------------------------------------------------------------
+\subsubsection{Đánh giá và So sánh}
+% -------------------------------------------------------------------
+
+\paragraph{So sánh BPR vs ALS.}
+Kết quả thực nghiệm chi tiết so sánh các mô hình CF (ALS, BERT-ALS, BPR) 
+được trình bày trong Phần Đánh giá. Tóm tắt:
+\begin{itemize}
+  \item ALS đạt metrics tổng thể cao hơn BPR đáng kể trong bối cảnh dữ liệu thưa.
+  \item ALS (với BERT Init) vượt trội nhờ semantic anchoring và matrix factorization ổn định.
+  \item BPR gặp khó khăn với dữ liệu cực kỳ thưa ($\sim 2$ interactions/user),
+  dẫn đến gradient noisy và hội tụ kém.
+  \item Kết luận: ALS là lựa chọn chính cho hệ thống.  
+\end{itemize}
+
+% ===================================================================
+\subsection{Model Registry và Quản lý Phiên bản}
+% ===================================================================
+
+Hệ thống Model Registry (Task 04) quản lý vòng đời của các model versions,
+hỗ trợ rollback, A/B testing, và audit trail.
+
+% -------------------------------------------------------------------
+\subsubsection{Cấu trúc Registry}
+% -------------------------------------------------------------------
+
+\begin{verbatim}
+artifacts/cf/
+├── als/
+│   ├── v1_20251125/
+│   └── v2_20251127/
+├── bpr/
+│   └── v1_20251126/
+└── registry.json          # Master registry file
+\end{verbatim}
+
+File \texttt{registry.json} chứa:
+\begin{itemize}
+  \item \texttt{current\_best}: Model đang được serving (ID, path, metrics).
+  \item \texttt{models}: Dictionary tất cả model versions với metadata đầy đủ.
+\end{itemize}
+
+% -------------------------------------------------------------------
+\subsubsection{Auto-Selection Best Model}
+% -------------------------------------------------------------------
+
+Khi có model mới được huấn luyện, Registry tự động so sánh với \texttt{current\_best}:
+\[
+  \texttt{promote} = 
+  \begin{cases}
+    \text{True} & \text{nếu } \text{NDCG@10}_{\text{new}} > \text{NDCG@10}_{\text{current}} \\
+    \text{False} & \text{ngược lại}
+  \end{cases}
+\]
+
+Nếu promote, \texttt{current\_best} được cập nhật và Serving layer nhận thông báo
+reload model mới (hot-reload, không downtime).
+
+% -------------------------------------------------------------------
+\subsubsection{Metadata và Reproducibility}
+% -------------------------------------------------------------------
+
+Mỗi model version lưu trữ metadata đầy đủ để đảm bảo reproducibility:
+\begin{itemize}
+  \item \texttt{data\_version}: Hash của dữ liệu huấn luyện (từ Task 01).
+  \item \texttt{git\_commit}: Phiên bản code tại thời điểm huấn luyện.
+  \item \texttt{hyperparameters}: Tất cả config (factors, regularization, etc.).
+  \item \texttt{metrics}: Kết quả evaluation trên test set.
+  \item \texttt{score\_range}: Phân phối CF scores cho normalization (Task 08).
+\end{itemize}
+
+Với metadata này, bất kỳ model version nào cũng có thể được reproduce chính xác
+bằng cách checkout đúng git commit và sử dụng đúng data version.

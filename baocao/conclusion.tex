@@ -1,0 +1,62 @@
+% -----------------------------------------------------------------
+% Kết luận và Hướng phát triển
+%
+% Văn phong: Tổng kết ngắn gọn, súc tích, highlight đóng góp chính
+
+\textit{Báo cáo đã trình bày một hệ thống gợi ý sản phẩm mỹ phẩm hoàn chỉnh,
+từ xử lý dữ liệu đến triển khai production. Phần này tổng kết các đóng góp
+chính và định hướng nghiên cứu tiếp theo.}
+
+% ===================================================================
+\subsection{Kết luận}
+% ===================================================================
+
+Hệ thống đã giải quyết thành công các thách thức đặc thù của bài toán:
+
+\paragraph{1. Xử lý dữ liệu thưa (Sparsity).}
+Với chỉ 8.6\% người dùng có đủ dữ liệu huấn luyện, hệ thống áp dụng chiến lược
+\textbf{dual-path routing}: CF cho trainable users và content-based fallback
+(PhoBERT similarity + popularity) cho cold-start users --- đảm bảo 100\% requests
+nhận được recommendations.
+
+\paragraph{2. Khắc phục rating skew.}
+Thay vì dùng rating thô (95\% là 5 sao), hệ thống tính \textbf{sentiment-enhanced
+confidence score} kết hợp rating với chất lượng bình luận, giúp mô hình phân biệt
+được các tương tác ``thật sự tích cực'' với các rating mặc định.
+
+\paragraph{3. Tận dụng ngữ nghĩa tiếng Việt.}
+\textbf{BERT Initialization} sử dụng PhoBERT embeddings để khởi tạo item factors,
+giải quyết cold-start cho sản phẩm mới và cải thiện chất lượng embedding trong
+không gian latent thưa.
+
+\paragraph{4. Kiến trúc production-ready.}
+Hệ thống đạt các SLA targets: latency P95 $< 100$ms, availability $\geq 99.9\%$,
+với automation pipeline đảm bảo data freshness và model updates tự động.
+
+% ===================================================================
+\subsection{Hướng phát triển}
+% ===================================================================
+
+\paragraph{Ngắn hạn.}
+\begin{itemize}
+  \item \textbf{A/B Testing Framework}: So sánh hiệu quả thực tế giữa các chiến lược
+  reranking (CTR, conversion rate).
+  \item \textbf{Real-time Features}: Tích hợp session-based signals (recently viewed,
+  cart items) vào scoring.
+\end{itemize}
+
+\paragraph{Trung hạn.}
+\begin{itemize}
+  \item \textbf{Graph Neural Networks}: Mô hình hóa quan hệ user-item-attribute
+  dưới dạng heterogeneous graph, tận dụng thông tin cấu trúc (cùng brand, cùng skin type).
+  \item \textbf{Multi-task Learning}: Đồng thời tối ưu click prediction và purchase
+  prediction để cân bằng exploration-exploitation.
+\end{itemize}
+
+\paragraph{Dài hạn.}
+\begin{itemize}
+  \item \textbf{Reinforcement Learning}: Áp dụng contextual bandits hoặc Q-learning
+  để học policy gợi ý tối ưu từ user feedback theo thời gian thực.
+  \item \textbf{Explainable Recommendations}: Sinh giải thích tự nhiên cho từng gợi ý
+  (``Vì bạn thích sản phẩm X có thành phần Y...'') sử dụng LLM.
+\end{itemize}

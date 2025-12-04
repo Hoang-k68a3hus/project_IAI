@@ -1,0 +1,169 @@
+# ============================================================================
+# VieComRec - Docker Compose Configuration
+# Vietnamese Cosmetics Recommender System
+# ============================================================================
+
+services:
+  # ==========================================================================
+  # API Service (Main recommendation endpoint)
+  # ==========================================================================
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: production
+    image: viecomrec:latest
+    container_name: viecomrec-api
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/app/data  # Writable for data ingestion staging
+      - ./artifacts:/app/artifacts  # Writable for model training
+      - ./logs:/app/logs
+      - ./config:/app/config  # Writable for scheduler config updates
+    environment:
+      - ENV=production
+      - LOG_LEVEL=INFO
+      - WORKERS=1
+    command: >
+      uvicorn service.api:app 
+      --host 0.0.0.0 
+      --port 8000 
+      --workers 1
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
+    restart: unless-stopped
+    networks:
+      - viecomrec-net
+
+  # ==========================================================================
+  # Monitoring Dashboard (Streamlit)
+  # ==========================================================================
+  dashboard:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: production
+    image: viecomrec:latest
+    container_name: viecomrec-dashboard
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./data:/app/data:ro
+      - ./artifacts:/app/artifacts:ro
+      - ./logs:/app/logs:ro
+      - ./config:/app/config:ro
+    environment:
+      - ENV=production
+    command: >
+      streamlit run service/dashboard.py 
+      --server.port 8501 
+      --server.address 0.0.0.0
+      --server.headless true
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - viecomrec-net
+
+  # ==========================================================================
+  # Training Job (Run on-demand)
+  # ==========================================================================
+  trainer:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: production
+    image: viecomrec:latest
+    container_name: viecomrec-trainer
+    profiles:
+      - training  # Only starts with: docker compose --profile training up trainer
+    volumes:
+      - ./data:/app/data
+      - ./artifacts:/app/artifacts
+      - ./logs:/app/logs
+      - ./config:/app/config:ro
+      - ./checkpoints:/app/checkpoints
+    environment:
+      - ENV=training
+      - LOG_LEVEL=DEBUG
+    command: python -m automation.model_training --auto-select
+    networks:
+      - viecomrec-net
+
+  # ==========================================================================
+  # Data Pipeline Job (Run on-demand)
+  # ==========================================================================
+  data-pipeline:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: production
+    image: viecomrec:latest
+    container_name: viecomrec-data-pipeline
+    profiles:
+      - pipeline  # Only starts with: docker compose --profile pipeline up data-pipeline
+    volumes:
+      - ./data:/app/data
+      - ./artifacts:/app/artifacts
+      - ./logs:/app/logs
+      - ./config:/app/config:ro
+    environment:
+      - ENV=pipeline
+      - LOG_LEVEL=INFO
+    command: python scripts/run_task01_complete.py
+    networks:
+      - viecomrec-net
+
+  # ==========================================================================
+  # Automation Scheduler (Background job orchestrator)
+  # ==========================================================================
+  scheduler:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: production
+    image: viecomrec:latest
+    container_name: viecomrec-scheduler
+    volumes:
+      - ./data:/app/data
+      - ./artifacts:/app/artifacts
+      - ./logs:/app/logs
+      - ./config:/app/config:ro
+    environment:
+      - ENV=production
+      - LOG_LEVEL=INFO
+      - SERVICE_URL=http://viecomrec-api:8000
+      - PROJECT_DIR=/app
+    command: >
+      python -m automation.scheduler
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - viecomrec-net
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+# =============================================================================
+# Networks
+# =============================================================================
+networks:
+  viecomrec-net:
+    driver: bridge
+
+# =============================================================================
+# Volumes (optional - for persistent storage)
+# =============================================================================
+volumes:
+  logs:
+  artifacts:

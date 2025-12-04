@@ -1,0 +1,682 @@
+% -----------------------------------------------------------------
+% Chuẩn hoá Tiếng Việt & Sửa lỗi Chính tả
+%
+% Văn phong: Kỹ sư Dữ liệu / NLP Practitioner - Chi tiết, thực tiễn
+% Nhấn mạnh: Quy trình hybrid AI-Human trong môi trường hạn chế tài nguyên
+% -----------------------------------------------------------------
+
+\subsection{Chuẩn hoá Tiếng Việt và Sửa lỗi Chính tả}
+
+%==============================================================================
+% PHẦN 1: THÁCH THỨC CỦA DỮ LIỆU BÌNH LUẬN TIẾNG VIỆT
+%==============================================================================
+\subsubsection{Thách thức của Dữ liệu Bình luận Tiếng Việt}
+
+Dữ liệu bình luận mỹ phẩm từ các sàn thương mại điện tử Việt Nam tồn tại trong trạng thái 
+\textit{hỗn loạn có hệ thống} --- một tập hợp đa dạng các biến thể ngôn ngữ phản ánh thói quen 
+gõ phím của người dùng phổ thông. Các loại nhiễu chính bao gồm:
+
+\begin{itemize}
+    \item \textbf{Teencode (viết tắt tuổi teen):} ``sp'' $\to$ ``sản phẩm'', ``ko/k/hk'' $\to$ ``không'', 
+    ``dc'' $\to$ ``được'', ``ntn'' $\to$ ``như thế nào''.
+    
+    \item \textbf{Lỗi gõ máy (typo):} ``sữ'' $\to$ ``sữa'', ``rat'' $\to$ ``rất'', ``đươc'' $\to$ ``được'' 
+    --- thường do gõ nhanh, bỏ sót dấu thanh hoặc nhầm phím.
+    
+    \item \textbf{Lỗi dính từ (sticky words):} ``đư ợc'', ``qu á'', ``sữ a'' --- do lỗi bàn phím hoặc 
+    copy-paste từ nguồn khác, tạo ra space thừa giữa các ký tự trong cùng một từ.
+    
+    \item \textbf{Emoji mã hóa thành text:} Hệ thống thu thập dữ liệu (crawler) chuyển đổi emoji 
+    thành dạng text như \texttt{red\_heart}, \texttt{thumbs\_up}, \texttt{crying\_face}.
+\end{itemize}
+
+\paragraph{Tại sao bước này là tiên quyết?}
+Các mô hình NLP như ViSoBERT (dùng cho phân tích cảm xúc) hay Vietnamese Embedding 
+(dùng cho embedding sản phẩm) được huấn luyện trên corpus tiếng Việt chuẩn. Khi gặp dữ liệu nhiễu, 
+hiệu suất suy giảm nghiêm trọng: từ ``sp'' không có trong vocabulary, dẫn đến 
+tokenization sai và embedding vô nghĩa. Việc chuẩn hóa dữ liệu \textit{trước} khi đưa vào mô hình 
+là điều kiện cần để đảm bảo chất lượng của toàn bộ pipeline phía sau.
+
+%==============================================================================
+% PHẦN 2: CHIẾN LƯỢC HYBRID AI-HUMAN
+%==============================================================================
+\subsubsection{Chiến lược Hybrid AI-Human: Đóng góp Kỹ thuật Chính}
+
+\paragraph{Bài toán tối ưu tài nguyên.}
+Với 369,000 dòng bình luận, việc gửi từng câu qua API của Generative AI (Gemini, GPT) để sửa lỗi 
+sẽ tiêu tốn hàng triệu token, chi phí ước tính \textbf{\$300--500}, và thời gian xử lý hàng chục giờ. 
+Đây là rào cản không chấp nhận được trong môi trường nghiên cứu với ngân sách hạn chế.
+
+\paragraph{Ý tưởng cốt lõi: Sửa từ vựng, không sửa từng câu.}
+Quan sát then chốt: \textit{Số từ duy nhất (vocabulary) luôn nhỏ hơn nhiều so với tổng số câu.} 
+Thay vì xử lý 369,000 câu, hệ thống trích xuất khoảng 52,000 từ duy nhất, sau khi tiền lọc còn 
+$\sim$45,000 từ cần AI can thiệp.
+
+\begin{equation}
+    \text{Tỷ lệ giảm} = \frac{|\mathcal{V}_{\text{unique}}|}{|\mathcal{D}_{\text{sentences}}|} 
+    = \frac{45{,}000}{369{,}000} \approx 12\%
+\end{equation}
+
+Lợi ích đạt được:
+\begin{itemize}
+    \item \textbf{Chi phí API:} Giảm từ $\sim$\$350 xuống $\sim$\$2.5 --- tiết kiệm \textbf{99\%}.
+    \item \textbf{Thời gian xử lý:} Từ hàng chục giờ xuống $\sim$45 phút.
+    \item \textbf{Tính nhất quán:} Một từ được sửa giống nhau ở mọi nơi xuất hiện. 
+    Ví dụ: ``sp'' $\to$ ``sản phẩm'' áp dụng cho tất cả 15,000 lần xuất hiện trong corpus.
+    \item \textbf{Khả năng kiểm soát:} Con người có thể rà soát bộ từ điển 45,000 entries 
+    thay vì 369,000 câu --- giảm 88\% khối lượng công việc kiểm định.
+\end{itemize}
+
+\paragraph{Nhận thức về giới hạn.}
+Phương pháp này có trade-off: một từ có thể mang nhiều nghĩa tùy ngữ cảnh. Ví dụ:
+\begin{itemize}
+    \item ``k'' sau số (``7k'') có nghĩa ``nghìn đồng'', không phải ``không''.
+    \item ``xl'' có thể là ``size XL'' hoặc ``xin lỗi''.
+    \item ``vc'' có thể là ``voucher'' hoặc từ lóng khác.
+\end{itemize}
+Các trường hợp này được xử lý bằng \textbf{quy tắc hậu xử lý} (post-processing rules) 
+ở bước sau, dù không hoàn toàn triệt để.
+
+%==============================================================================
+% PHẦN 3: CHI TIẾT QUY TRÌNH 6 BƯỚC
+%==============================================================================
+\subsubsection{Chi tiết Quy trình Xử lý}
+
+Pipeline chuẩn hóa được thiết kế gồm 6 bước tuần tự, mỗi bước có mục tiêu rõ ràng:
+
+\begin{figure}[H]
+\centering
+\begin{verbatim}
+data_reviews_purchase.csv (369K dòng)
+        │
+        ▼
+[1. Trích xuất Vocabulary] ──► 52,341 từ duy nhất
+        │
+        ▼
+[2. Tiền lọc] ─────────────► 45,679 từ cần AI xử lý
+        │
+        ▼
+[3. Chunking + Gemini API] ► 237 chunk × 200 từ/chunk
+        │
+        ▼
+[4. Merge + Human Review] ─► spelling_corrections.json
+        │
+        ▼
+[5. Xử lý Space Error] ────► Sửa từ ghép bị tách
+        │
+        ▼
+[6. Apply + Emoji Mapping] ► data_reviews_corrected.csv
+\end{verbatim}
+\caption{Pipeline chuẩn hóa tiếng Việt với hybrid AI-Human approach}
+\end{figure}
+
+%--- Bước 1: Tiền lọc ---
+\paragraph{Bước 1: Tiền lọc (Pre-filtering).}
+Mục tiêu: Giảm số lượng từ cần AI xử lý bằng cách loại bỏ các từ không cần can thiệp.
+
+Các quy tắc lọc:
+\begin{enumerate}
+    \item \textbf{Từ tiếng Việt chuẩn:} Các từ phổ biến đã đúng (``hàng'', ``da'', ``tốt'', ``mùi'') 
+    được bỏ qua dựa trên whitelist.
+    
+    \item \textbf{Tên thương hiệu và thuật ngữ chuyên ngành:} ``innisfree'', ``retinol'', ``bha'', 
+    ``serum'', ``toner'' --- giữ nguyên không sửa.
+    
+    \item \textbf{Từ đã tokenize:} Các cụm từ có dạng \texttt{word1\_word2} 
+    (``sữa\_rửa\_mặt'') là output của tokenizer, tỷ lệ sai rất thấp.
+    
+    \item \textbf{Rác (garbage):} Chuỗi chỉ toàn số, ký tự lặp (``aaaa''), quá ngắn ($<2$) 
+    hoặc quá dài ($>30$ ký tự).
+\end{enumerate}
+
+Kết quả: Từ 52,341 từ gốc, loại bỏ $\sim$6,600 từ, còn lại \textbf{45,679 từ} cần AI kiểm tra.
+
+%--- Bước 2: Xử lý với Gemini ---
+\paragraph{Bước 2: Xử lý với Generative AI (Gemini 2.5 Flash).}
+
+\textbf{Kỹ thuật Chunking:} Danh sách 45,679 từ được chia thành 237 chunk, mỗi chunk chứa 
+$\sim$200 từ. Con số này được chọn để đảm bảo mỗi request không vượt quá giới hạn context 
+của mô hình và tối ưu tốc độ phản hồi.
+
+\textbf{Prompt Engineering:} Prompt được thiết kế chuyên biệt cho domain mỹ phẩm Việt Nam:
+\begin{verbatim}
+SYSTEM_PROMPT = """
+Bạn là Chuyên gia NLP về E-commerce Việt Nam, ngành Mỹ phẩm.
+QUY TẮC:
+1. TEENCODE: "k/ko/hok" -> "không", "sp" -> "sản phẩm"
+2. LỖI CHÍNH TẢ: "sữ" -> "sữa", "rat" -> "rất"
+3. GIỮ NGUYÊN: Thương hiệu (innisfree), thành phần (retinol)
+4. RÁC -> null: Chuỗi ngẫu nhiên, mã đơn hàng
+OUTPUT: {"từ_gốc": "từ_chuẩn" hoặc null}
+"""
+\end{verbatim}
+
+\textbf{Cơ chế Resume:} Script hỗ trợ chạy tiếp khi bị ngắt quãng. Trước mỗi request, 
+hệ thống kiểm tra file output đã tồn tại hay chưa:
+\begin{verbatim}
+for chunk_file in chunk_files:
+    output_path = f"corrected_{chunk_file}"
+    if os.path.exists(output_path):
+        continue  # Đã xử lý, bỏ qua
+    # Gọi Gemini API...
+\end{verbatim}
+
+%--- Bước 3: Human Review ---
+\paragraph{Bước 3: Kiểm định Con người (Human-in-the-Loop).}
+
+\textbf{Chiến lược Pareto:} Không khả thi để con người kiểm tra toàn bộ 45,000 từ. 
+Áp dụng nguyên tắc 80/20:
+\begin{itemize}
+    \item \textbf{Kiểm tra kỹ:} Top $\sim$10,000 từ xuất hiện nhiều nhất ($>10$ lần). 
+    Đây là những từ ảnh hưởng đến nhiều câu nhất --- sửa sai một từ = sửa sai hàng nghìn câu.
+    
+    \item \textbf{Tin tưởng AI:} $\sim$35,000 từ xuất hiện ít ($\leq 10$ lần). 
+    Rủi ro thấp vì ảnh hưởng hạn chế, chi phí kiểm tra không tương xứng.
+\end{itemize}
+
+Các lỗi phổ biến của AI được phát hiện qua human review:
+\begin{itemize}
+    \item ``7k'' bị sửa thành ``7 không'' $\to$ Thêm quy tắc giữ nguyên ``số + k''.
+    \item ``xl'' bị sửa thành ``xin lỗi'' $\to$ Thêm quy tắc giữ nguyên size quần áo.
+\end{itemize}
+
+%--- Bước 4: Space Error ---
+\paragraph{Bước 4: Xử lý Lỗi Dính Từ (Space Error).}
+
+Một loại lỗi không thể sửa ở cấp độ từ đơn lẻ: \textbf{từ ghép bị tách sai} do gõ lỗi hoặc 
+copy-paste. Ví dụ: ``đư ợc'', ``sữ a'', ``qu á''.
+
+\textbf{Phương pháp thống kê:} Hệ thống quét corpus, thống kê các pattern từ 1 ký tự 
+(``ợc'', ``ừa'', ``á'') xuất hiện ngay sau một từ khác với tần suất cao. 
+Nếu pattern đủ phổ biến, thiết lập quy tắc ghép:
+
+\begin{verbatim}
+SPACE_FIX_RULES = {
+    "đư ợc": "được",   # 2,341 lần xuất hiện
+    "sữ a": "sữa",     # 1,892 lần
+    "qu á": "quá",     # 1,456 lần
+    "r ất": "rất",     # 987 lần
+    ...
+}
+\end{verbatim}
+
+Áp dụng bằng regex với word boundary để tránh sửa nhầm:
+\begin{equation}
+    \texttt{re.sub(r"đư\textbackslash s+ợc", "được", text)}
+\end{equation}
+
+%--- Bước 5: Từ điển viết tắt ---
+\paragraph{Bước 5: Từ điển Viết tắt Thủ công.}
+
+Song song với AI corrections, hệ thống duy trì một từ điển viết tắt được kiểm chứng thủ công:
+
+\begin{center}
+\begin{tabular}{|l|l|l|}
+\hline
+\textbf{Viết tắt} & \textbf{Chuẩn hóa} & \textbf{Ghi chú} \\
+\hline
+sp & sản phẩm & Phổ biến nhất \\
+dc, đc & được & \\
+ko, hk, kg & không & ``kg'' trong context mỹ phẩm thường = không \\
+nv & nhân viên & \\
+sd & sử dụng & \\
+km & khuyến mãi & \\
+vc & voucher & Context thương mại điện tử \\
+srm & sữa rửa mặt & Chuyên ngành mỹ phẩm \\
+kcn & kem chống nắng & Chuyên ngành mỹ phẩm \\
+\hline
+\end{tabular}
+\end{center}
+
+\textbf{Quy tắc đặc biệt:} Pattern \texttt{\textbackslash d+k} (7k, 100k) là đơn vị tiền tệ, 
+\textit{không} sửa ``k'' thành ``không''.
+
+%--- Bước 6: Emoji Mapping ---
+\paragraph{Bước 6: Xử lý Emoji.}
+
+Thay vì loại bỏ emoji, hệ thống chuyển đổi chúng thành \textbf{tín hiệu cảm xúc} 
+để phục vụ tính Confidence Score trong feature engineering:
+
+\begin{center}
+\begin{tabular}{|l|l|p{5.5cm}|}
+\hline
+\textbf{Nhóm} & \textbf{Điều chỉnh} & \textbf{Ví dụ} \\
+\hline
+Positive & +0.02/emoji & \texttt{red\_heart}, \texttt{thumbs\_up}, \texttt{glowing\_star} \\
+\hline
+Negative & $-$0.02/emoji & \texttt{crying\_face}, \texttt{thumbs\_down}, \texttt{angry\_face} \\
+\hline
+Neutral & 0 & \texttt{thinking\_face}, \texttt{face\_with\_monocle} \\
+\hline
+\end{tabular}
+\end{center}
+
+Ví dụ tính toán:
+\begin{verbatim}
+Text: "Sản phẩm tốt red_heart red_heart thumbs_up"
+  → Emoji: +3 positive → Adjustment: +0.06
+  → Score: 0.50 → 0.56
+
+Text: "Thất vọng quá angry_face broken_heart"
+  → Emoji: -2 negative → Adjustment: -0.04
+  → Score: 0.50 → 0.46
+\end{verbatim}
+
+%==============================================================================
+% PHẦN 4: ĐÁNH GIÁ HIỆU QUẢ
+%==============================================================================
+\subsubsection{Đánh giá Hiệu quả}
+
+\paragraph{Thống kê xử lý.}
+
+\begin{center}
+\begin{tabular}{|l|r|r|}
+\hline
+\textbf{Chỉ số} & \textbf{Số lượng} & \textbf{Tỷ lệ} \\
+\hline
+Tổng từ vựng gốc & 9,469(chỉ riêng phần xuất hiện nhiều)  & 100\% \\
+Từ được sửa bởi AI & 3,416 & 36.1\% \\
+Từ giữ nguyên (unchanged) & 4,754 & 50.2\% \\
+Từ loại bỏ (null/rác) & 1,299 & 13.7\% \\
+\hline
+Tổng interactions được cải thiện & 166,072 & 44\% \\
+\hline
+\end{tabular}
+\end{center}
+
+\paragraph{Đánh giá chất lượng.}
+Lấy mẫu ngẫu nhiên 500 câu trước/sau chuẩn hóa để kiểm định:
+\begin{itemize}
+    \item \textbf{Tỷ lệ sửa đúng:} 94.2\% --- các từ được sửa đúng ngữ cảnh.
+    \item \textbf{Tỷ lệ sửa sai:} 3.1\% --- chủ yếu do từ đa nghĩa.
+    \item \textbf{Không sửa được:} 2.7\% --- từ lóng quá mới, typo lạ.
+\end{itemize}
+
+Với tỷ lệ sai 3.1\%, việc áp dụng chuẩn hóa vẫn \textit{lợi nhiều hơn hại}: 
+các mô hình NLP (ViSoBERT, Vietnamese Embedding) hoạt động ổn định hơn đáng kể trên dữ liệu đã chuẩn hóa 
+so với dữ liệu thô đầy lỗi chính tả.
+
+\paragraph{So sánh chi phí tài nguyên.}
+
+\begin{center}
+\begin{tabular}{|l|r|r|}
+\hline
+\textbf{Phương pháp} & \textbf{Sửa từng câu} & \textbf{Sửa vocabulary} \\
+\hline
+Số lượng xử lý & 369,000 câu & 45,000 từ \\
+Chi phí API ước tính & \$300--500 & \$2.5 \\
+Thời gian gọi API & 10--15 giờ & 45 phút \\
+Thời gian Human Review & Không khả thi & 4 giờ \\
+\hline
+\textbf{Tiết kiệm} & --- & \textbf{99\%} \\
+\hline
+\end{tabular}
+\end{center}
+
+\paragraph{Kết luận.}
+Quy trình hybrid AI-Human đạt được sự cân bằng giữa \textbf{chất lượng} (94\% accuracy), 
+\textbf{chi phí} (tiết kiệm 99\%), và \textbf{khả năng kiểm soát} (human review cho từ quan trọng). 
+Đây là đóng góp kỹ thuật thực tiễn cho bài toán chuẩn hóa dữ liệu tiếng Việt 
+trong điều kiện tài nguyên hạn chế.
+
+
+%==============================================================================
+% PHẦN 5: PHÂN KHÚC NGƯỜI DÙNG
+%==============================================================================
+\subsection{Phân khúc Người dùng (User Segmentation)}
+
+\subsubsection{Phân tích Phân phối Tương tác}
+
+Phân tích dữ liệu tương tác của hệ thống cho thấy một đặc điểm quan trọng: 
+phân phối tương tác theo người dùng tuân theo \textbf{luật lũy thừa (Power Law)}, 
+trong đó đa số người dùng chỉ có rất ít tương tác.
+
+\begin{center}
+\begin{tabular}{|l|r|r|}
+\hline
+\textbf{Số tương tác} & \textbf{Số người dùng} & \textbf{Tỷ lệ} \\
+\hline
+1 tương tác & $\sim$274,000 & 91.4\% \\
+2--5 tương tác & $\sim$22,000 & 7.3\% \\
+6--10 tương tác & $\sim$3,000 & 1.0\% \\
+$>$10 tương tác & $\sim$1,000 & 0.3\% \\
+\hline
+\textbf{Tổng} & $\sim$300,000 & 100\% \\
+\hline
+\end{tabular}
+\end{center}
+
+\paragraph{Ngưỡng phân khúc: Tại sao chọn $\geq 2$?}
+Với mô hình Collaborative Filtering, yêu cầu tối thiểu là có thông tin về \textit{nhiều hơn một} 
+sản phẩm để tìm pattern tương đồng với người dùng khác. Phân tích chi tiết:
+
+\begin{itemize}
+    \item \textbf{1 tương tác}: Không đủ dữ liệu để học pattern --- CF sẽ chỉ memorize, không generalize.
+    
+    \item \textbf{$\geq 2$ tương tác}: Tối thiểu để xây dựng ``taste profile'' --- 
+    biết user thích sản phẩm A \textit{và} B cho phép suy luận về sản phẩm C tương tự.
+    
+    \item \textbf{Trade-off}: Ngưỡng cao hơn ($\geq 3$, $\geq 5$) cho kết quả CF tốt hơn 
+    nhưng loại bỏ quá nhiều user, làm giảm coverage.
+\end{itemize}
+
+Với ngưỡng $\geq 2$, hệ thống đạt được sự cân bằng:
+\begin{equation}
+    \text{Trainable Users} = \{ u \in \mathcal{U} : |\mathcal{I}_u| \geq 2 \land |\mathcal{I}_u^+| \geq 1 \}
+\end{equation}
+trong đó $\mathcal{I}_u$ là tập sản phẩm user $u$ đã tương tác, và $\mathcal{I}_u^+$ là tập 
+sản phẩm với rating $\geq 4$ (positive feedback).
+
+\subsubsection{Chiến lược Định tuyến (Routing Strategy)}
+
+Hệ thống sử dụng kiến trúc \textbf{dual-path routing} để phục vụ hai phân khúc người dùng 
+với chiến lược tối ưu riêng:
+
+\paragraph{Đường 1: Trainable Users.}
+Người dùng có $\geq 2$ tương tác và ít nhất 1 positive rating:
+
+\begin{enumerate}
+    \item \textbf{CF Scoring}: Tính điểm từ mô hình ALS/BPR: $\hat{r}_{ui} = \mathbf{u}_u^\top \mathbf{v}_i$
+    
+    \item \textbf{Filter Seen Items}: Loại bỏ sản phẩm đã tương tác
+    
+    \item \textbf{Hybrid Reranking}: Kết hợp nhiều tín hiệu (CF, content, popularity, quality)
+    với trọng số chi tiết được trình bày tại \textbf{mục 5.2}.
+    
+    \item \textbf{Return}: Top-K personalized recommendations
+\end{enumerate}
+
+\paragraph{Đường 2: Cold-start Users.}
+Người dùng mới hoặc có $< 2$ tương tác:
+
+\begin{enumerate}
+    \item \textbf{Content-based Similarity}: Nếu user có 1 tương tác, 
+    tính độ tương đồng embedding với sản phẩm đã xem
+    (sử dụng Vietnamese Embedding 1024 chiều).
+    
+    \item \textbf{Popularity Mixing}: Kết hợp với Top-50 sản phẩm phổ biến để đảm bảo diversity.
+    
+    \item \textbf{Cold-start Reranking}: Trọng số khác với trainable users,
+    ưu tiên content và popularity (chi tiết tại \textbf{mục 5.2}).
+    
+    \item \textbf{Return}: Top-K content-based recommendations
+\end{enumerate}
+
+\paragraph{Tại sao cold-start path cần tối ưu riêng?}
+Với 91.4\% traffic đi qua cold-start path, hiệu năng của đường này quyết định 
+trải nghiệm của đa số người dùng. Các tối ưu bao gồm:
+\begin{itemize}
+    \item Pre-compute item-item similarity matrix từ Vietnamese Embedding
+    \item Cache Top-50 popular items (refresh hàng ngày)
+    \item Batch inference cho user profiles
+\end{itemize}
+
+%==============================================================================
+% PHẦN 6: TÍCH HỢP BERT EMBEDDINGS
+%==============================================================================
+\subsection{Tích hợp BERT Embeddings}
+
+\subsubsection{Vietnamese Embedding Model}
+
+Hệ thống sử dụng \textbf{AITeamVN/Vietnamese\_Embedding} \cite{vietnamese_embedding}, mô hình embedding 
+được tối ưu hóa cho tiếng Việt, để trích xuất vector ngữ nghĩa cho sản phẩm. 
+Mô hình này được huấn luyện trên corpus tiếng Việt đa dạng và cho kết quả 
+embedding chất lượng cao cho các tác vụ semantic similarity.
+
+\paragraph{Tại sao cần Embedding trong Recommender System?}
+Trong môi trường high-sparsity (1.23 interactions/user), collaborative filtering 
+gặp khó khăn do thiếu overlap giữa các user. Content-based approach sử dụng 
+semantic embeddings từ mô tả sản phẩm giúp:
+\begin{itemize}
+    \item Khắc phục cold-start problem (sản phẩm mới không có tương tác)
+    \item Cung cấp fallback khi CF không đủ dữ liệu
+    \item Khởi tạo item factors cho ALS (thay vì random initialization)
+\end{itemize}
+
+\subsubsection{Thiết kế Input Text}
+
+Mỗi sản phẩm được biểu diễn bằng một chuỗi text kết hợp nhiều trường thông tin, 
+sử dụng token \texttt{[SEP]} làm delimiter:
+
+\begin{verbatim}
+Template:
+"Tên: {product_name} [SEP] Công dụng: {feature} [SEP] 
+ Thành phần: {ingredient} [SEP] Loại da: {skin_type}"
+
+Ví dụ thực tế:
+"Tên: Kem dưỡng ẩm Innisfree Green Tea Seed Cream [SEP] 
+ Công dụng: Dưỡng ẩm sâu, cấp nước, làm dịu da [SEP] 
+ Thành phần: Chiết xuất trà xanh, Hyaluronic Acid, Niacinamide [SEP] 
+ Loại da: Da khô, da thường, da hỗn hợp"
+\end{verbatim}
+
+\paragraph{Lý do thiết kế.}
+\begin{itemize}
+    \item \textbf{Multi-field concatenation}: Kết hợp nhiều trường tăng richness của embedding, 
+    giúp phân biệt sản phẩm có tên giống nhau nhưng công dụng khác.
+    
+    \item \textbf{[SEP] token}: Giúp mô hình nhận biết ranh giới giữa các trường, 
+    tránh blending ngữ nghĩa không mong muốn.
+    
+    \item \textbf{Thứ tự trường}: Đặt tên sản phẩm đầu tiên vì BERT có positional bias --- 
+    tokens đầu thường có attention weight cao hơn.
+\end{itemize}
+
+\subsubsection{Kiến trúc Trích xuất Embedding}
+
+\begin{figure}[H]
+\centering
+\begin{verbatim}
+Input Text (max 512 tokens)
+        │
+        ▼
+┌───────────────────────────────┐
+│   Vietnamese Embedding        │  → WordPiece tokenization
+│   Tokenizer                   │
+└───────────────────────────────┘
+        │
+        ▼
+┌───────────────────────────────┐
+│   Transformer Encoder         │  → Multi-layer attention
+│   (AITeamVN/Vietnamese_       │     Hidden size: 1024
+│    Embedding)                 │
+└───────────────────────────────┘
+        │
+        ▼
+┌───────────────────────────────┐
+│   Mean Pooling Strategy       │  → Average over tokens
+│   (exclude padding tokens)    │     (weighted by attention mask)
+└───────────────────────────────┘
+        │
+        ▼
+    Embedding ∈ ℝ^1024
+\end{verbatim}
+\caption{Pipeline trích xuất embedding cho sản phẩm sử dụng Vietnamese Embedding model}
+\end{figure}
+
+\paragraph{Mean Pooling Strategy.}
+Hệ thống sử dụng \textbf{mean pooling} thay vì lấy [CLS] token:
+\begin{equation}
+    \mathbf{e} = \frac{\sum_{t=1}^{T} m_t \cdot \mathbf{h}_t}{\sum_{t=1}^{T} m_t}
+\end{equation}
+trong đó $\mathbf{h}_t$ là hidden state của token thứ $t$, $m_t$ là attention mask 
+(1 cho token thực, 0 cho padding), và $T$ là độ dài sequence.
+
+Lý do chọn mean pooling:
+\begin{itemize}
+    \item Product descriptions có độ dài khác nhau --- mean pooling đảm bảo 
+    thông tin từ toàn bộ mô tả được capture đồng đều.
+    
+    \item [CLS] token được thiết kế cho classification tasks, có thể mất 
+    thông tin chi tiết về thành phần và công dụng sản phẩm.
+\end{itemize}
+
+\subsubsection{Ứng dụng của Embeddings}
+
+\paragraph{1. Tính độ tương đồng Item-Item.}
+Sử dụng cosine similarity giữa các embedding:
+\begin{equation}
+    \text{sim}(i, j) = \frac{\mathbf{e}_i^\top \mathbf{e}_j}{\|\mathbf{e}_i\| \|\mathbf{e}_j\|}
+\end{equation}
+
+Pre-compute similarity matrix cho Top-K neighbors của mỗi item:
+\begin{equation}
+    \mathbf{S} \in \mathbb{R}^{n \times n}, \quad S_{ij} = \text{sim}(i, j)
+\end{equation}
+
+\paragraph{2. Khởi tạo Item Factors cho ALS (BERT Initialization).}
+Thay vì random initialization, project Vietnamese Embedding xuống không gian 
+latent factors của ALS:
+\begin{equation}
+    \mathbf{V}_{\text{init}} = \text{SVD}_{k}(\mathbf{E}) \in \mathbb{R}^{n \times k}
+\end{equation}
+trong đó $\mathbf{E} \in \mathbb{R}^{n \times 1024}$ là ma trận embeddings, 
+và $k=64$ là số latent factors.
+
+\textbf{Lợi ích}: Với sparse data, BERT initialization giúp item factors 
+bắt đầu từ vị trí có semantic meaning, tránh ``random drift'' trong quá trình training.
+
+\paragraph{Lưu ý về sự khác biệt hai mô hình.}
+Hệ thống sử dụng hai mô hình embedding riêng biệt:
+\begin{itemize}
+    \item \textbf{ViSoBERT} \cite{visobert} (\texttt{5CD-AI/Vietnamese-Sentiment-visobert}, 768 chiều): 
+    Phân tích cảm xúc bình luận để tính \texttt{comment\_quality\_score} trong tầng dữ liệu.
+    
+    \item \textbf{Vietnamese Embedding} \cite{vietnamese_embedding} (\texttt{AITeamVN/Vietnamese\_Embedding}, 1024 chiều): 
+    Trích xuất embedding sản phẩm cho BERT Initialization và content-based similarity.
+\end{itemize}
+
+\paragraph{3. Content-based Scoring trong Hybrid Reranking.}
+Tính user profile embedding từ lịch sử tương tác:
+\begin{equation}
+    \mathbf{u}_{\text{content}} = \frac{1}{|\mathcal{I}_u^+|} \sum_{i \in \mathcal{I}_u^+} \mathbf{e}_i
+\end{equation}
+
+Content score cho candidate item:
+\begin{equation}
+    s_{\text{content}}(u, j) = \text{sim}(\mathbf{u}_{\text{content}}, \mathbf{e}_j)
+\end{equation}
+
+\subsubsection{Artifacts và Lưu trữ}
+
+\begin{center}
+\begin{tabular}{|l|l|p{6cm}|}
+\hline
+\textbf{File} & \textbf{Format} & \textbf{Nội dung} \\
+\hline
+\texttt{product\_embeddings.pt} & PyTorch tensor & Ma trận $\mathbf{E} \in \mathbb{R}^{2244 \times 1024}$ \\
+\hline
+\texttt{embedding\_metadata.json} & JSON & Model version, pooling strategy, timestamp \\
+\hline
+\texttt{item\_similarity\_top50.npz} & Sparse matrix & Top-50 similar items cho mỗi product \\
+\hline
+\end{tabular}
+\end{center}
+
+\paragraph{Hiệu năng.}
+\begin{itemize}
+    \item Thời gian encode 2,244 sản phẩm: $\sim$5 phút (GPU) / $\sim$30 phút (CPU)
+    \item Kích thước embedding file: $\sim$17 MB (float32)
+    \item Similarity lookup: O(1) với pre-computed sparse matrix
+\end{itemize}
+
+%==============================================================================
+% PHẦN 7: TỔNG HỢP PIPELINE EMBEDDING
+%==============================================================================
+\subsection{Tổng hợp: Phân tách Vai trò của Hai Mô hình Embedding}
+
+\textbf{Lưu ý quan trọng}: Hệ thống sử dụng \textbf{hai mô hình BERT riêng biệt} cho 
+hai mục đích khác nhau. Việc hiểu rõ sự phân tách này là điều kiện tiên quyết 
+để hiểu kiến trúc tổng thể.
+
+\begin{figure}[H]
+\centering
+\begin{verbatim}
+============================================================================
+          PIPELINE EMBEDDING - PHÂN TÁCH RÕ RÀNG
+============================================================================
+
+[ĐÂU VÀO: DỮ LIỆU THÔ]
+       |
+       v
++----------------------------------------------------------------------+
+|  TẦNG DỮ LIỆU (DATA LAYER - OFFLINE)                                |
+|                                                                      |
+|  Mô hình: ViSoBERT (5CD-AI/Vietnamese-Sentiment-visobert)           |
+|  Kích thước: 768 chiều                                               |
+|  Mục đích: Phân tích cảm xúc bình luận (Sentiment Analysis)            |
+|                                                                      |
+|  ĐẦU VÀO: Bình luận tiếng Việt (review text)                         |
+|  ĐẦU RA:  comment_quality_score \in [0, 1]                          |
+|           (dùng cho confidence_score của ALS)                        |
+|                                                                      |
+|  KHÔNG sử dụng trong inference/serving!                              |
++----------------------------------------------------------------------+
+       |
+       | confidence_score = rating + comment_quality
+       v
++----------------------------------------------------------------------+
+|  TẦNG HUẤN LUYỆN (TRAINING LAYER)                                    |
+|                                                                      |
+|  Mô hình: Vietnamese Embedding (AITeamVN/Vietnamese_Embedding)       |
+|  Kích thước: 1024 chiều -> chiếu xuống 64 chiều (TruncatedSVD)       |
+|  Mục đích: BERT Initialization cho Item Factors của ALS              |
+|                                                                      |
+|  ĐẦU VÀO: Văn bản sản phẩm (tên + thành phần + công dụng)              |
+|  ĐẦU RA:  V^{(0)} \in R^{|I| x 64} (Initial Item Factors)           |
++----------------------------------------------------------------------+
+       |
+       | ALS Training (15 iterations)
+       v
++----------------------------------------------------------------------+
+|  TẦNG PHỤC VỤ (SERVING LAYER - ONLINE)                               |
+|                                                                      |
+|  Mô hình: Vietnamese Embedding (AITeamVN/Vietnamese_Embedding)       |
+|  Kích thước: 1024 chiều (FULL, không chiếu)                          |
+|                                                                      |
+|  Sử dụng cho:                                                        |
+|    1. Content-based Scoring (Hybrid Reranking)                       |
+|    2. Smart Search (Semantic Similarity)                             |
+|    3. Similar Items (Item-Item Similarity)                           |
+|    4. User Profile Construction (Cold-start Fallback)                |
+|                                                                      |
+|  ĐẶC ĐIỂM: Latency ~40ms cho encoding (có cache)                     |
++----------------------------------------------------------------------+
+
+============================================================================
+Đáng lưu ý:
+- ViSoBERT (768d) CHỈ dùng offline trong Data Preprocessing
+- Vietnamese Embedding (1024d) dùng cho Training và Serving
+- KHAI BÁO mô hình rõ ràng trong từng phần code/config
+============================================================================
+\end{verbatim}
+\caption{Sơ đồ phân tách vai trò của hai mô hình embedding trong hệ thống}
+\label{fig:embedding_separation}
+\end{figure}
+
+\paragraph{Tại sao sử dụng hai mô hình?}
+\begin{itemize}
+    \item \textbf{ViSoBERT}: Được tối ưu hóa cho sentiment analysis tiếng Việt, 
+    cho kết quả tốt hơn Vietnamese Embedding trong tác vụ phân loại cảm xúc.
+    
+    \item \textbf{Vietnamese Embedding}: Được tối ưu hóa cho semantic similarity,
+    cho kết quả tốt hơn trong tác vụ so sánh độ tương đồng ngữ nghĩa.
+    
+    \item \textbf{Chuyên môn hóa}: Mỗi mô hình được dùng cho mục đích mà nó
+    được huấn luyện tốt nhất, thay vì dùng một mô hình cho mọi việc.
+\end{itemize}
+
+\paragraph{Riêng biệt về kích thước.}
+\begin{center}
+\begin{tabular}{|l|c|c|l|}
+\hline
+\textbf{Mô hình} & \textbf{Kích thước} & \textbf{Tầng} & \textbf{Mục đích} \\
+\hline
+ViSoBERT & 768 chiều & Data (Offline) & Sentiment $\rightarrow$ comment\_quality \\
+\hline
+Vietnamese Embedding & 1024 chiều & Training & BERT Init $\rightarrow$ chiếu 64d \\
+\hline
+Vietnamese Embedding & 1024 chiều & Serving & Content + Search (full 1024d) \\
+\hline
+\end{tabular}
+\end{center}

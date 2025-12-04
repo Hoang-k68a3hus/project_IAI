@@ -1,0 +1,25 @@
+# FastAPI and server
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+pydantic>=2.0.0
+
+# Rate limiting
+slowapi>=0.1.9
+
+# Data processing
+numpy>=1.24.0
+pandas>=2.0.0
+
+# Scientific computing / ML
+scipy>=1.11.0
+torch>=2.2.0
+
+# Scheduling and automation
+apscheduler>=3.10.0
+
+# Logging and monitoring
+# (Add your logging libraries here)
+
+# Machine Learning (if needed)
+# transformers>=4.30.0
+

@@ -1,0 +1,359 @@
+%==============================================================================
+% PHẦN 1: TỔNG QUAN VỀ HỌC MÁY (Machine Learning Foundations)
+%==============================================================================
+\section{Tổng quan về Học máy}
+
+\subsection{Định nghĩa Học máy}
+
+Học máy (Machine Learning) là một nhánh của trí tuệ nhân tạo nghiên cứu cách thức mà máy tính có thể tự động cải thiện hiệu suất thông qua kinh nghiệm. Theo định nghĩa kinh điển của Tom Mitchell \cite{mitchell1997}:
+
+\begin{quote}
+\textit{"Một chương trình máy tính được gọi là học từ kinh nghiệm $E$ đối với một lớp nhiệm vụ $T$ và thước đo hiệu suất $P$, nếu hiệu suất của nó trên các nhiệm vụ trong $T$, được đo bằng $P$, cải thiện theo kinh nghiệm $E$."}
+\end{quote}
+
+Định nghĩa này nhấn mạnh ba thành phần cốt lõi của bất kỳ hệ thống học máy nào: (1) nhiệm vụ cần giải quyết, (2) kinh nghiệm học được từ dữ liệu, và (3) thước đo để đánh giá sự tiến bộ.
+
+\subsection{Khái niệm Tác nhân Học tập (Learning Agent)}
+
+Theo Ertel \cite{ertel2017}, một \textbf{Tác nhân Học tập} (Learning Agent) là một tác nhân thông minh có khả năng tự điều chỉnh hành vi dựa trên tương tác với môi trường. Khác với các tác nhân được lập trình cứng, tác nhân học tập sử dụng một \textbf{hàm mục tiêu} (target function) $f: \mathcal{X} \rightarrow \mathcal{Y}$ để ánh xạ từ không gian đặc trưng đầu vào $\mathcal{X}$ sang không gian đầu ra $\mathcal{Y}$. Hàm này không được định nghĩa trước mà được \textit{học} từ dữ liệu huấn luyện.
+
+Quy trình học máy bao gồm các thành phần sau:
+\begin{itemize}
+    \item \textbf{Nhiệm vụ $T$:} Xác định bài toán cần giải quyết (phân loại, hồi quy, xếp hạng).
+    \item \textbf{Dữ liệu huấn luyện $D$:} Tập hợp các mẫu đại diện cho bài toán.
+    \item \textbf{Thuật toán học $\mathcal{A}$:} Phương pháp tối ưu hóa hàm mục tiêu.
+    \item \textbf{Thước đo hiệu suất $P$:} Độ đo để đánh giá chất lượng của hàm đã học.
+\end{itemize}
+
+Mục tiêu cuối cùng của học máy là \textbf{khả năng tổng quát hóa} (generalization): tác nhân phải hoạt động tốt trên dữ liệu mới chưa từng thấy trong quá trình huấn luyện.
+
+\subsection{Phân loại Học máy}
+
+Dựa trên bản chất của dữ liệu huấn luyện, Ertel \cite{ertel2017} phân chia học máy thành hai mô hình chính:
+
+\subsubsection{Học có giám sát (Supervised Learning)}
+
+Trong học có giám sát, mỗi mẫu huấn luyện bao gồm một cặp đầu vào-đầu ra $(\mathbf{x}_i, y_i)$, trong đó $\mathbf{x}_i \in \mathcal{X}$ là vector đặc trưng và $y_i \in \mathcal{Y}$ là nhãn tương ứng. Mục tiêu là học một hàm $f$ sao cho $f(\mathbf{x}) \approx y$ cho các mẫu mới.
+
+Học có giám sát được chia thành hai loại bài toán:
+\begin{itemize}
+    \item \textbf{Phân loại (Classification):} Khi $\mathcal{Y}$ là tập hữu hạn các lớp rời rạc. Ví dụ: phân loại email spam/không spam, dự đoán xếp hạng sản phẩm (1-5 sao).
+    \item \textbf{Hồi quy (Regression):} Khi $\mathcal{Y} \subseteq \mathbb{R}$ là miền liên tục. Ví dụ: dự đoán điểm rating, ước lượng xác suất click.
+\end{itemize}
+
+\subsubsection{Học không giám sát (Unsupervised Learning)}
+
+Trong học không giám sát, dữ liệu huấn luyện chỉ bao gồm các vector đặc trưng $\{\mathbf{x}_1, \mathbf{x}_2, \ldots, \mathbf{x}_n\}$ mà không có nhãn đi kèm. Mục tiêu là khám phá cấu trúc ẩn trong dữ liệu.
+
+Các bài toán điển hình bao gồm:
+\begin{itemize}
+    \item \textbf{Phân cụm (Clustering):} Nhóm các đối tượng tương tự vào cùng một cụm. Ứng dụng: phân nhóm khách hàng, gom cụm sản phẩm theo đặc tính.
+    \item \textbf{Học biểu diễn (Representation Learning):} Học cách biến đổi dữ liệu thành không gian đặc trưng mới có ý nghĩa. Các kỹ thuật như embedding cho phép biểu diễn văn bản, hình ảnh, hoặc sản phẩm dưới dạng vector số thực, từ đó tính toán độ tương tự giữa các đối tượng.
+\end{itemize}
+
+%==============================================================================
+% PHẦN 2: MẠNG NƠ-RON VÀ DEEP LEARNING
+%==============================================================================
+\section{Mạng Nơ-ron và Deep Learning}
+
+\subsection{Mạng Nơ-ron Nhân Tạo}
+
+Mạng nơ-ron nhân tạo (Artificial Neural Networks) lấy cảm hứng từ cấu trúc sinh học của não bộ, nơi hàng tỷ nơ-ron kết nối với nhau để xử lý thông tin. Theo Ertel \cite{ertel2017}, nền tảng toán học của mạng nơ-ron bắt đầu từ mô hình đơn giản nhưng mạnh mẽ của một đơn vị tính toán cơ bản.
+
+\subsubsection{Mô hình toán học của nơ-ron nhân tạo}
+
+Một nơ-ron nhân tạo nhận đầu vào là một vector $\mathbf{x} = (x_1, x_2, \ldots, x_n)^\top$ và thực hiện hai phép tính:
+
+\textbf{Bước 1: Tổng hợp tuyến tính}
+\begin{equation}
+    z = \sum_{i=1}^{n} w_i x_i + b = \mathbf{w}^\top \mathbf{x} + b
+\end{equation}
+trong đó $\mathbf{w} = (w_1, w_2, \ldots, w_n)^\top$ là vector trọng số và $b$ là độ lệch (bias).
+
+\textbf{Bước 2: Áp dụng hàm kích hoạt}
+\begin{equation}
+    y = f(z)
+\end{equation}
+trong đó $f$ là hàm kích hoạt (activation function) đưa tính phi tuyến vào mô hình.
+
+\subsubsection{Các hàm kích hoạt (Activation Functions)}
+
+Hàm kích hoạt đóng vai trò quyết định trong việc mô hình hóa các quan hệ phi tuyến. Dưới đây là các hàm kích hoạt quan trọng:
+
+\paragraph{Hàm Sigmoid}
+\begin{equation}
+    \sigma(z) = \frac{1}{1 + e^{-z}}
+\end{equation}
+Hàm Sigmoid nén đầu ra vào khoảng $(0, 1)$, thích hợp cho bài toán phân loại nhị phân. Tuy nhiên, hàm này gặp vấn đề \textit{vanishing gradient} khi $|z|$ lớn, khiến gradient gần bằng 0 và làm chậm quá trình học.
+
+\paragraph{Hàm ReLU (Rectified Linear Unit)}
+\begin{equation}
+    \text{ReLU}(z) = \max(0, z) = 
+    \begin{cases}
+        z, & \text{nếu } z > 0 \\
+        0, & \text{nếu } z \leq 0
+    \end{cases}
+\end{equation}
+ReLU giải quyết vấn đề vanishing gradient cho các giá trị dương và có độ phức tạp tính toán thấp. Đây là hàm kích hoạt được sử dụng phổ biến nhất trong các mạng deep learning hiện đại.
+
+\paragraph{Hàm Tanh}
+\begin{equation}
+    \tanh(z) = \frac{e^z - e^{-z}}{e^z + e^{-z}}
+\end{equation}
+Hàm Tanh có đầu ra trong khoảng $(-1, 1)$, với tâm tại gốc tọa độ, giúp quá trình học hội tụ nhanh hơn so với Sigmoid.
+
+\subsubsection{Mạng đa lớp (Multi-layer Networks)}
+
+Perceptron đơn lớp chỉ có thể học các hàm phân tách tuyến tính. Để mô hình hóa các quan hệ phức tạp, mạng nơ-ron được mở rộng thành nhiều lớp:
+\begin{itemize}
+    \item \textbf{Lớp đầu vào (Input layer):} Nhận dữ liệu thô.
+    \item \textbf{Các lớp ẩn (Hidden layers):} Học các biểu diễn trừu tượng ở các mức độ khác nhau.
+    \item \textbf{Lớp đầu ra (Output layer):} Tạo kết quả cuối cùng.
+\end{itemize}
+
+\subsubsection{Thuật toán Lan truyền ngược (Backpropagation)}
+
+Theo Ertel \cite{ertel2017}, thuật toán lan truyền ngược là phương pháp cốt lõi để huấn luyện mạng nơ-ron đa lớp. Ý tưởng chính là sử dụng \textbf{quy tắc chuỗi} (chain rule) để tính gradient của hàm mất mát theo từng trọng số:
+
+\begin{equation}
+    \frac{\partial \mathcal{L}}{\partial w_{ij}} = \frac{\partial \mathcal{L}}{\partial z_j} \cdot \frac{\partial z_j}{\partial w_{ij}}
+\end{equation}
+
+Thuật toán gồm bốn bước:
+\begin{enumerate}
+    \item \textbf{Lan truyền thuận (Forward pass):} Tính đầu ra dự đoán $\hat{y}$ từ đầu vào $\mathbf{x}$.
+    \item \textbf{Tính hàm mất mát:} So sánh $\hat{y}$ với nhãn thực $y$, ví dụ $\mathcal{L} = \frac{1}{2}(\hat{y} - y)^2$.
+    \item \textbf{Lan truyền ngược (Backward pass):} Tính gradient của $\mathcal{L}$ theo các trọng số từ lớp đầu ra về lớp đầu vào.
+    \item \textbf{Cập nhật trọng số:} Sử dụng Gradient Descent: $w \leftarrow w - \eta \frac{\partial \mathcal{L}}{\partial w}$.
+\end{enumerate}
+
+\subsection{Deep Learning}
+
+\subsubsection{Từ mạng nơ-ron đến Deep Learning}
+
+Theo Chương 9.7 của Ertel \cite{ertel2017}, \textbf{Deep Learning} là bước tiến hóa tự nhiên của mạng nơ-ron đa lớp, sử dụng các kiến trúc với nhiều lớp ẩn (deep architectures) để học các biểu diễn đặc trưng phân cấp. Điểm đột phá của Deep Learning nằm ở khả năng \textbf{trích xuất đặc trưng tự động} (automatic feature extraction): thay vì phải thiết kế đặc trưng thủ công, mạng sâu tự động học các đặc trưng từ dữ liệu thô.
+
+\begin{itemize}
+    \item \textbf{Các lớp thấp:} Học các đặc trưng cơ bản (cạnh, góc trong ảnh; âm vị trong tiếng nói).
+    \item \textbf{Các lớp cao:} Tổng hợp thành các đặc trưng trừu tượng hơn (hình dạng, từ, cụm từ).
+    \item \textbf{Lớp đầu ra:} Sử dụng các đặc trưng đã học để đưa ra quyết định.
+\end{itemize}
+
+\subsubsection{Kết nối với PhoBERT}
+
+Trong đồ án này, chúng tôi sử dụng \textbf{PhoBERT} \cite{nguyen2020phobert} --- một mô hình Deep Learning dựa trên kiến trúc Transformer --- để xử lý ngôn ngữ tự nhiên tiếng Việt. PhoBERT được huấn luyện trước (pre-trained) trên corpus tiếng Việt lớn, cho phép trích xuất các embedding ngữ nghĩa chất lượng cao từ mô tả sản phẩm và bình luận người dùng.
+
+Mô hình PhoBERT đóng vai trò:
+\begin{itemize}
+    \item Tạo embedding cho sản phẩm từ mô tả văn bản (thành phần, công dụng, loại da phù hợp).
+    \item Đánh giá chất lượng bình luận để điều chỉnh trọng số confidence trong mô hình CF.
+    \item Cung cấp khả năng gợi ý content-based cho người dùng mới (cold-start).
+\end{itemize}
+
+%==============================================================================
+% PHẦN 3: HỆ THỐNG GỢI Ý VÀ CÁC THUẬT TOÁN CỐT LÕI
+%==============================================================================
+\section{Hệ thống Gợi ý và Các thuật toán Cốt lõi}
+
+\subsection{Bài toán Implicit Feedback}
+
+Trong thực tế, phần lớn dữ liệu tương tác người dùng-sản phẩm là \textbf{dữ liệu ẩn} (implicit feedback), bao gồm các hành vi như click, xem trang, thêm vào giỏ hàng, hoặc mua hàng. Khác với explicit feedback (như rating từ 1-5 sao), implicit feedback có các đặc điểm:
+
+\begin{itemize}
+    \item \textbf{Không có phản hồi tiêu cực rõ ràng:} Việc người dùng không tương tác với một sản phẩm có thể do chưa biết đến, không nhất thiết do không thích.
+    \item \textbf{Nhiễu cao:} Một click có thể do tò mò hoặc vô tình, không phản ánh sở thích thực sự.
+    \item \textbf{Khối lượng lớn:} Số lượng tương tác ẩn thường lớn hơn nhiều so với số lượng rating được đánh giá.
+\end{itemize}
+
+Bài toán đặt ra: Cho ma trận tương tác $R \in \mathbb{R}^{m \times n}$ (với $m$ người dùng, $n$ sản phẩm), trong đó $r_{ui}$ là cường độ tương tác của người dùng $u$ với sản phẩm $i$, hãy dự đoán các sản phẩm mà người dùng sẽ quan tâm trong tương lai.
+
+\subsection{Matrix Factorization và Alternating Least Squares}
+
+\subsubsection{Ý tưởng phân rã ma trận}
+
+Matrix Factorization (phân rã ma trận) là kỹ thuật nền tảng trong hệ thống gợi ý \cite{koren2009matrix}, dựa trên giả thuyết rằng sở thích người dùng và đặc tính sản phẩm có thể được biểu diễn trong một không gian \textbf{đặc trưng ẩn} (latent factor space) có số chiều thấp.
+
+Ma trận tương tác $R$ được xấp xỉ bởi tích của hai ma trận:
+\begin{equation}
+    R \approx U V^\top
+\end{equation}
+trong đó:
+\begin{itemize}
+    \item $U \in \mathbb{R}^{m \times k}$: Ma trận đặc trưng người dùng, với hàng $U_u$ là vector embedding của người dùng $u$.
+    \item $V \in \mathbb{R}^{n \times k}$: Ma trận đặc trưng sản phẩm, với hàng $V_i$ là vector embedding của sản phẩm $i$.
+    \item $k \ll \min(m, n)$: Số chiều không gian ẩn (thường từ 50 đến 200).
+\end{itemize}
+
+Điểm dự đoán cho cặp $(u, i)$ được tính bằng tích vô hướng:
+\begin{equation}
+    \hat{r}_{ui} = U_u^\top V_i = \sum_{f=1}^{k} u_{uf} \cdot v_{if}
+\end{equation}
+
+\subsubsection{Mô hình Implicit ALS: Preference và Confidence}
+
+Với dữ liệu implicit feedback, Hu et al. \cite{hu2008collaborative} đề xuất mô hình chuyển đổi tương tác thành hai thành phần:
+
+\paragraph{Preference (Sở thích nhị phân)}
+\begin{equation}
+    p_{ui} = 
+    \begin{cases}
+        1, & \text{nếu } r_{ui} > 0 \text{ (có tương tác)} \\
+        0, & \text{nếu } r_{ui} = 0 \text{ (không có tương tác)}
+    \end{cases}
+\end{equation}
+
+\paragraph{Confidence (Độ tin cậy)}
+
+Độ tin cậy phản ánh mức độ chắc chắn về sở thích của người dùng, tỷ lệ thuận với cường độ tương tác:
+\begin{equation}
+    c_{ui} = 1 + \alpha \cdot r_{ui}
+\end{equation}
+trong đó $\alpha > 0$ là tham số điều chỉnh (thường $\alpha \in [5, 50]$). Khi $r_{ui} = 0$, ta có $c_{ui} = 1$ (độ tin cậy tối thiểu); với $r_{ui}$ lớn, độ tin cậy tăng tương ứng.
+
+\subsubsection{Hàm mất mát Implicit ALS}
+
+Hàm mục tiêu là tối thiểu hóa sai số bình phương có trọng số:
+\begin{equation}
+    \mathcal{L} = \sum_{u=1}^{m} \sum_{i=1}^{n} c_{ui} \left( p_{ui} - U_u^\top V_i \right)^2 + \lambda \left( \sum_{u} \|U_u\|^2 + \sum_{i} \|V_i\|^2 \right)
+\end{equation}
+trong đó $\lambda$ là hệ số điều chuẩn (regularization) nhằm ngăn chặn overfitting.
+
+\textbf{Điểm quan trọng:} Khác với explicit feedback (chỉ tính trên các ô có rating), implicit ALS tính trên \textit{toàn bộ ma trận}, bao gồm cả các ô không có tương tác --- đây là những ``negative'' tiềm ẩn với confidence thấp.
+
+\subsubsection{Công thức cập nhật ALS}
+
+Thuật toán ALS (Alternating Least Squares) tối ưu bằng cách luân phiên cố định một ma trận và giải cho ma trận còn lại. Khi cố định $V$, bài toán trở thành tối ưu lồi với nghiệm đóng.
+
+Định nghĩa ký hiệu:
+\begin{itemize}
+    \item $C_u = \text{diag}(c_{u1}, c_{u2}, \ldots, c_{un})$: Ma trận đường chéo confidence cho user $u$.
+    \item $\mathbf{p}_u = (p_{u1}, p_{u2}, \ldots, p_{un})^\top$: Vector preference của user $u$.
+\end{itemize}
+
+\textbf{Cập nhật user factors:}
+\begin{equation}
+    U_u \leftarrow \left( V^\top C_u V + \lambda I \right)^{-1} V^\top C_u \mathbf{p}_u
+\end{equation}
+
+\textbf{Cập nhật item factors:}
+\begin{equation}
+    V_i \leftarrow \left( U^\top C_i U + \lambda I \right)^{-1} U^\top C_i \mathbf{p}_i
+\end{equation}
+với $C_i = \text{diag}(c_{1i}, \ldots, c_{mi})$ và $\mathbf{p}_i$ được định nghĩa tương tự.
+
+Thuật toán lặp lại quá trình cập nhật cho đến khi hội tụ hoặc đạt số vòng lặp tối đa.
+
+\subsection{Bayesian Personalized Ranking (BPR)}
+
+\subsubsection{Động cơ: Tối ưu hóa xếp hạng}
+
+Trong khi ALS tối ưu dự đoán điểm (pointwise), nhiều ứng dụng gợi ý quan tâm đến \textbf{thứ tự xếp hạng} hơn là giá trị điểm tuyệt đối. Bayesian Personalized Ranking (BPR), được đề xuất bởi Rendle et al. \cite{rendle2009bpr}, là phương pháp \textbf{pairwise ranking} trực tiếp tối ưu cho mục tiêu này.
+
+\subsubsection{Ý tưởng cốt lõi}
+
+Với mỗi người dùng $u$, ta giả định rằng sản phẩm mà $u$ đã tương tác (positive item $i$) được ưa thích hơn sản phẩm chưa tương tác (negative item $j$):
+\begin{equation}
+    i >_u j \quad \text{(user } u \text{ thích } i \text{ hơn } j\text{)}
+\end{equation}
+
+\subsubsection{Hàm mục tiêu BPR-OPT}
+
+Mục tiêu là tối đa hóa xác suất hậu nghiệm của các preference pairwise:
+\begin{equation}
+    \mathcal{L}_{\text{BPR}} = -\sum_{(u,i,j) \in \mathcal{D}_S} \ln \sigma(\hat{x}_{uij}) + \lambda \|\Theta\|^2
+\end{equation}
+trong đó:
+\begin{itemize}
+    \item $\mathcal{D}_S = \{(u, i, j) \mid i \in \mathcal{I}_u^+, j \in \mathcal{I} \setminus \mathcal{I}_u^+\}$: Tập các triplet (user, positive item, negative item).
+    \item $\hat{x}_{uij} = \hat{x}_{ui} - \hat{x}_{uj} = U_u^\top (V_i - V_j)$: Chênh lệch điểm dự đoán.
+    \item $\sigma(x) = \frac{1}{1 + e^{-x}}$: Hàm sigmoid.
+    \item $\Theta = \{U, V\}$: Tập tham số cần học.
+\end{itemize}
+
+\subsubsection{Cập nhật SGD cho BPR}
+
+Với mỗi triplet $(u, i, j)$, đặt $s = \sigma(-\hat{x}_{uij})$, các công thức cập nhật với learning rate $\eta$:
+\begin{align}
+    U_u &\leftarrow U_u + \eta \left[ s(V_i - V_j) - \lambda U_u \right] \\
+    V_i &\leftarrow V_i + \eta \left[ s \cdot U_u - \lambda V_i \right] \\
+    V_j &\leftarrow V_j + \eta \left[ -s \cdot U_u - \lambda V_j \right]
+\end{align}
+
+\subsubsection{Chiến lược lấy mẫu Negative}
+
+Chất lượng của BPR phụ thuộc nhiều vào cách chọn negative samples:
+\begin{itemize}
+    \item \textbf{Uniform sampling:} Chọn ngẫu nhiên từ tập items chưa tương tác. Đơn giản nhưng có thể chọn nhiều ``easy negatives''.
+    \item \textbf{Hard negative sampling:} Ưu tiên chọn items có điểm dự đoán cao (khó phân biệt với positive). Giúp model học sâu hơn nhưng cần cân bằng để tránh overfitting.
+    \item \textbf{Popularity-biased sampling:} Lấy mẫu theo phân phối popularity. Items phổ biến mà user không tương tác là negative mạnh hơn.
+\end{itemize}
+
+%==============================================================================
+% PHẦN 4: ĐÁNH GIÁ (Evaluation Metrics)
+%==============================================================================
+\section{Đánh giá Hệ thống Gợi ý}
+
+Trong hệ thống gợi ý, việc đánh giá chất lượng mô hình đòi hỏi các độ đo phù hợp với mục tiêu xếp hạng. Hai độ đo quan trọng nhất là Recall@K và NDCG@K.
+
+\subsection{Recall@K}
+
+Recall@K đo lường tỷ lệ các sản phẩm liên quan (relevant items) được tìm thấy trong top-K gợi ý.
+
+\begin{equation}
+    \text{Recall@K}(u) = \frac{|\mathcal{R}_u \cap \mathcal{G}_u^{(K)}|}{|\mathcal{R}_u|}
+\end{equation}
+trong đó:
+\begin{itemize}
+    \item $\mathcal{R}_u$: Tập các sản phẩm thực sự liên quan đến user $u$ (ground truth).
+    \item $\mathcal{G}_u^{(K)}$: Tập top-K sản phẩm được gợi ý cho user $u$.
+    \item $|\cdot|$: Số lượng phần tử của tập hợp.
+\end{itemize}
+
+Recall@K trung bình trên toàn bộ tập test:
+\begin{equation}
+    \text{Recall@K} = \frac{1}{|\mathcal{U}_{test}|} \sum_{u \in \mathcal{U}_{test}} \text{Recall@K}(u)
+\end{equation}
+
+\textbf{Ý nghĩa:} Recall@K cho biết hệ thống có thể ``tìm lại'' được bao nhiêu phần trăm các sản phẩm mà user thực sự quan tâm trong danh sách top-K gợi ý.
+
+\subsection{NDCG@K (Normalized Discounted Cumulative Gain)}
+
+NDCG@K là độ đo xếp hạng có tính đến \textbf{vị trí} của các sản phẩm liên quan trong danh sách gợi ý. Sản phẩm liên quan xuất hiện ở vị trí cao hơn được đánh giá tốt hơn.
+
+\subsubsection{Discounted Cumulative Gain (DCG@K)}
+
+\begin{equation}
+    \text{DCG@K}(u) = \sum_{i=1}^{K} \frac{\text{rel}_i}{\log_2(i + 1)}
+\end{equation}
+trong đó $\text{rel}_i$ là relevance score tại vị trí $i$ (thường là 1 nếu sản phẩm liên quan, 0 nếu không).
+
+Hệ số $\frac{1}{\log_2(i+1)}$ là \textbf{discount factor}, phạt các sản phẩm liên quan xuất hiện ở vị trí thấp hơn trong danh sách.
+
+\subsubsection{Ideal DCG (IDCG@K)}
+
+IDCG@K là giá trị DCG lý tưởng khi các sản phẩm liên quan được xếp hạng hoàn hảo (tất cả ở đầu danh sách):
+\begin{equation}
+    \text{IDCG@K}(u) = \sum_{i=1}^{\min(K, |\mathcal{R}_u|)} \frac{1}{\log_2(i + 1)}
+\end{equation}
+
+\subsubsection{Normalized DCG (NDCG@K)}
+
+\begin{equation}
+    \text{NDCG@K}(u) = \frac{\text{DCG@K}(u)}{\text{IDCG@K}(u)}
+\end{equation}
+
+NDCG@K có giá trị trong khoảng $[0, 1]$, với 1 là xếp hạng hoàn hảo.
+
+NDCG@K trung bình trên toàn bộ tập test:
+\begin{equation}
+    \text{NDCG@K} = \frac{1}{|\mathcal{U}_{test}|} \sum_{u \in \mathcal{U}_{test}} \text{NDCG@K}(u)
+\end{equation}
+
+\textbf{Ý nghĩa:} NDCG@K đánh giá không chỉ việc tìm được sản phẩm liên quan mà còn việc xếp chúng ở vị trí cao trong danh sách --- điều quan trọng trong thực tế khi người dùng thường chỉ xem một vài gợi ý đầu tiên.
+
+\subsection{So sánh Recall@K và NDCG@K}
+
+\begin{itemize}
+    \item \textbf{Recall@K:} Chỉ quan tâm đến việc sản phẩm liên quan có nằm trong top-K hay không, không phân biệt vị trí. Phù hợp khi mục tiêu là ``tìm được càng nhiều càng tốt''.
+    \item \textbf{NDCG@K:} Quan tâm đến cả số lượng và thứ tự xếp hạng. Phù hợp khi vị trí hiển thị quan trọng (người dùng thường chỉ click vào các gợi ý đầu tiên).
+\end{itemize}

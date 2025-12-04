@@ -1,0 +1,831 @@
+\documentclass{beamer}
+
+\usetheme{Madrid} % bạn có thể đổi theme: Berlin, CambridgeUS, Warsaw,...
+
+\usepackage[utf8]{inputenc}
+\usepackage[vietnamese]{babel}
+\usepackage{lipsum}
+
+% Title Information
+\title[Hệ thống gợi ý mỹ phẩm Hybrid]{BÁO CÁO CUỐI KÌ\\Hệ thống Gợi ý Mỹ phẩm Hybrid (ALS + BPR + PhoBERT)}
+\author{Nhóm thực hiện: Nhóm 21}
+\institute{Trường Đại học Khoa học Tự nhiên - ĐHQGHN}
+\date{\today}
+
+\begin{document}
+
+%-------------------------------------------------------
+\begin{frame}
+    \titlepage
+\end{frame}
+
+%---------------------------------------------------
+
+%=======================================================
+%======================
+%--------------------------------------------------
+\begin{frame}[plain]
+    \centering
+    {\Huge \textbf{1. GIỚI THIỆU}}
+\end{frame}
+%--------------------------------------------------
+
+\section{Giới thiệu}
+%======================
+
+%--------------------------------------------------
+\begin{frame}{Đặt vấn đề}
+\textbf{Bối cảnh ngành thương mại điện tử Việt Nam:}
+\begin{itemize}
+    \item Thị trường TMĐT Việt Nam 2023: 16.4 tỷ USD, CAGR > 20\%.
+    \item Ngành mỹ phẩm - làm đẹp: tăng trưởng nhanh, cạnh tranh cao.
+    \item Người dùng yêu cầu \textbf{cá nhân hóa trải nghiệm mua sắm} (91\% chọn đề xuất phù hợp nhu cầu cá nhân).
+\end{itemize}
+
+\textbf{Thách thức dữ liệu mỹ phẩm Việt Nam:}
+\begin{itemize}
+    \item \textbf{Dữ liệu thưa (Sparsity)}: ~99.9\% interactions bị thiếu.
+    \item \textbf{Rating lệch (Skewed Ratings)}: >85\% đánh giá 5 sao.
+    \item \textbf{Cold-start users}: 30-40\% người dùng hàng tháng là mới.
+\end{itemize}
+\end{frame}
+%--------------------------------------------------
+
+%--------------------------------------------------
+\begin{frame}{Mục tiêu đề tài}
+\textbf{Mục tiêu tổng quát:} 
+Xây dựng hệ thống gợi ý lai (Hybrid Recommender) cho mỹ phẩm, giải quyết sparsity, rating skew và cold-start, nâng cao cá nhân hóa.
+
+\textbf{Mục tiêu cụ thể:}
+\begin{enumerate}
+    \item \textbf{Hệ thống Hybrid CF + Content-based:} 
+    \begin{itemize}
+        \item CF: ALS với implicit feedback, regularization mạnh.
+        \item Content-based: PhoBERT embeddings, similarity trong không gian ngữ nghĩa.
+        \item Kết hợp tuyến tính với cơ chế chuyển đổi CF / Content-based.
+    \end{itemize}
+    \item \textbf{Ứng dụng Deep Learning (PhoBERT) cho ngôn ngữ Việt:} 
+    \begin{itemize}
+        \item Tiền xử lý text: chuẩn hóa Unicode, tách từ, chuẩn hóa tên thành phần.
+        \item Trích embedding 768-dim, tính cosine similarity, xây dựng knowledge graph.
+    \end{itemize}
+    \item \textbf{Triển khai theo hướng MLOps:} 
+    \begin{itemize}
+        \item Pipeline tự động: thu thập, train, validation, tuning, CI/CD.
+        \item Monitoring: data drift, metrics (precision, recall, NDCG, CTR).
+        \item Model registry, container hóa, Kubernetes autoscaling.
+    \end{itemize}
+\end{enumerate}
+\end{frame}
+%--------------------------------------------------
+
+%--------------------------------------------------
+
+\begin{frame}[plain]
+    \centering
+    {\Huge \textbf{2. CHIẾN LƯỢC NGƯỜI DÙNG VÀ PHÂN KHÚC}}
+\end{frame}
+
+%--------------------------------------------------
+\begin{frame}{2.2 Chuẩn hóa Tiếng Việt và Sửa lỗi Chính tả}
+\textbf{Thách thức dữ liệu:} teencode, lỗi gõ nhanh, từ dính, token sai, emoji mã hoá.
+
+\textbf{Quy trình Hybrid AI--Human gồm 6 giai đoạn:}
+\begin{enumerate}
+    \item Trích xuất từ vựng (50k+ token).
+    \item Tiền lọc: bỏ từ sạch, thương hiệu, rác, từ có \_.
+    \item Gọi AI (Gemini 2.5 Flash) theo \textbf{chunk 200 từ}.
+    \item Kiểm định con người: top 10k từ xuất hiện nhiều.
+    \item Hậu xử lý: fix từ ghép tách sai (``đư ợc'' → ``được'').
+    \item Cập nhật từ điển viết tắt thủ công.
+\end{enumerate}
+
+\textbf{Hiệu quả:} sửa đúng 94.2\%, sai 3.1\%, tiết kiệm 99\% chi phí API.
+\end{frame}
+%--------------------------------------------------
+
+
+%--------------------------------------------------
+\begin{frame}{2.3 Phân khúc Người dùng (User Segmentation)}
+\begin{itemize}
+    \item \textbf{Dữ liệu tương tác:}
+    \begin{itemize}
+        \item Chỉ \(\approx 8.6\%\) người dùng có \(\ge 2\) tương tác.
+    \end{itemize}
+
+    \item \textbf{Chiến lược định tuyến theo loại user:}
+    \begin{itemize}
+        \item \textbf{Trainable Users:}
+        \begin{itemize}
+            \item Collaborative Filtering (ALS/BPR).
+            \item Reranking theo chất lượng bình luận.
+        \end{itemize}
+
+        \item \textbf{Cold-start Users:}
+        \begin{itemize}
+            \item Content-based: PhoBERT embedding similarity.
+            \item Popularity-based fallback.
+        \end{itemize}
+    \end{itemize}
+\end{itemize}
+\end{frame}
+%--------------------------------------------------
+
+
+%--------------------------------------------------
+\begin{frame}{2.4 Tích hợp BERT Embeddings}
+\begin{itemize}
+    \item \textbf{Input kết hợp:}
+    \begin{itemize}
+        \item Tên sản phẩm
+        \item Công dụng
+        \item Thành phần
+        \item Loại da phù hợp
+    \end{itemize}
+
+    \item \textbf{Output:} Vector ngữ nghĩa (BERT embedding).
+    \begin{itemize}
+        \item Dùng tính độ tương đồng nội dung.
+        \item Dùng làm \textbf{khởi tạo tham số} cho ALS → giúp hội tụ nhanh và chính xác hơn.
+    \end{itemize}
+\end{itemize}
+\end{frame}
+%--------------------------------------------------
+
+%--------------------------------------------------
+\begin{frame}[plain]
+    \centering
+    {\Huge \textbf{3. HUẤN LUYỆN MÔ HÌNH}}
+\end{frame}
+%--------------------------------------------------
+
+%=======================================================
+%===========================================
+\section{Huấn luyện mô hình (Implementation Details)}
+%===========================================
+
+%-------------------------------------------
+\begin{frame}{3.1 Alternating Least Squares (ALS)}
+%-------------------------------------------
+\textbf{ALS} là thuật toán Matrix Factorization tối ưu cho dữ liệu implicit.
+
+\begin{itemize}
+    \item \textbf{Đầu vào}: Ma trận Confidence dạng CSR (rất thưa, density 0.11\%).
+    \item Confidence score:
+    \[
+        c_{ui} = r_{ui} + q_{ui}
+    \]
+    \item Giá trị $\; c_{ui} \in [1, 6]$: phân biệt rating 5 sao thật vs. 5 sao nhiễu.
+    \item Kích thước: $26{,}000 \times 2{,}200$, nnz $\approx 65{,}000$.
+    \item Thách thức: dữ liệu cực thưa $\Rightarrow$ dễ trôi dạt embedding.
+\end{itemize}
+\end{frame}
+
+%-------------------------------------------
+\begin{frame}{ALS – BERT Initialization (Đóng góp chính)}
+%-------------------------------------------
+\textbf{Vấn đề}: Khởi tạo Gaussian ngẫu nhiên khiến cold items bị drift.
+
+\textbf{Giải pháp}: \textbf{BERT Initialization}.
+
+\begin{enumerate}
+    \item Trích xuất embedding của sản phẩm bằng \textbf{PhoBERT}:
+    \[
+        e_i = \text{PhoBERT}(t_i)_{\text{[CLS]}} \in \mathbb{R}^{768}
+    \]
+    \item Giảm chiều bằng \textbf{TruncatedSVD} xuống $d=64$.
+    \item Căn chỉnh theo \texttt{item\_to\_idx}.
+    \item Gán làm item factors khởi tạo:
+    \[
+        V^{(0)} = \text{AlignedBERTEmbeddings}
+    \]
+\end{enumerate}
+
+\textbf{Lợi ích:}
+\begin{itemize}
+    \item Hội tụ nhanh hơn (15 iterations).
+    \item Cold items được neo ngữ nghĩa.
+    \item Chuyển tri thức từ NLP $\rightarrow$ CF.
+\end{itemize}
+
+\textbf{Kết quả:} Recall@10 tăng \textbf{+33\%}.
+\end{frame}
+
+%-------------------------------------------
+\begin{frame}{ALS – Hyperparameters \& Training Loop}
+%-------------------------------------------
+\begin{itemize}
+    \item \textbf{factors = 64} \quad không gian tiềm ẩn
+    \item \textbf{regularization = 0.1} \quad giữ ổn định BERT init
+    \item \textbf{alpha = 10} \quad phù hợp confidence [1,6]
+    \item \textbf{iterations = 15}
+\end{itemize}
+
+\textbf{Hàm mất mát ALS:}
+\[
+L = \sum_{u,i} C_{ui}(p_{ui} - u_u^\top v_i)^2 
++ \lambda \left( \sum_u \|u_u\|^2 + \sum_i \|v_i\|^2 \right)
+\]
+
+\textbf{Tối ưu luân phiên:}
+\[
+u_u = (V^\top C_u V + \lambda I)^{-1} V^\top C_u p_u
+\]
+\[
+v_i = (U^\top C_i U + \lambda I)^{-1} U^\top C_i p_i
+\]
+
+Huấn luyện dùng \textbf{implicit C++ backend}, thời gian: \textbf{1–2 phút}.
+\end{itemize}
+\end{frame}
+
+%-------------------------------------------
+\begin{frame}{3.2 Bayesian Personalized Ranking (BPR)}
+%-------------------------------------------
+\textbf{Mục tiêu}: tối ưu \textbf{ranking} (pairwise), không dự đoán rating tuyệt đối.
+
+\textbf{Đầu vào:} bộ ba (u, i, j)
+\begin{itemize}
+    \item $i$: positive item ($r_{ui} \ge 4$)
+    \item $j$: negative item (chưa tương tác hoặc rating thấp)
+\end{itemize}
+
+\textbf{Số lượng triplets:}  
+\[
+|D_S| = 65{,}000 \times 5 = 325{,}000
+\]
+
+\textbf{Mục tiêu tối ưu:}
+\[
+\hat{r}_{ui} > \hat{r}_{uj}, \quad \forall (u,i,j) \in D_S
+\]
+\end{frame}
+
+%-------------------------------------------
+\begin{frame}{BPR – Hard Negative Mining}
+%-------------------------------------------
+\textbf{Vấn đề:} random negatives quá dễ ⇒ gradient gần 0.
+
+\textbf{Giải pháp: Dual Hard Negative Mining}
+\begin{enumerate}
+    \item \textbf{Explicit hard negatives}: rating thấp ($\le 3$).
+    \item \textbf{Implicit hard negatives}: sản phẩm phổ biến nhưng user không mua.
+\end{enumerate}
+
+\textbf{Mixing:}
+\[
+p(\text{hard}) = 0.3,\quad p(\text{random}) = 0.7
+\]
+
+\textbf{Lợi ích:}
+\begin{itemize}
+    \item Gradient giàu thông tin hơn.
+    \item Giảm popularity bias.
+    \item Học được ranh giới tinh tế giữa các sản phẩm tương tự.
+\end{itemize}
+\end{frame}
+
+%-------------------------------------------
+\begin{frame}{BPR – Loss Function}
+%-------------------------------------------
+\textbf{Hàm mất mát BPR:}
+\[
+L_{\text{BPR}} = -\sum_{(u,i,j)} \ln \sigma(\hat{r}_{ui} - \hat{r}_{uj})
++ \lambda (\|u_u\|^2 + \|v_i\|^2 + \|v_j\|^2)
+\]
+
+\textbf{Huấn luyện:}
+\begin{itemize}
+    \item SGD + mini-batch
+    \item Xavier init cho embeddings
+    \item Adam optimizer
+    \item 50–80 epochs
+\end{itemize}
+
+\textbf{Kết quả:} cải thiện ranking cho các user có hành vi đa dạng.
+\end{frame}
+
+%-------------------------------------------
+\begin{frame}{3.3 Model Registry \& Versioning}
+%-------------------------------------------
+Tất cả artifacts được lưu trữ theo version:
+
+\texttt{artifacts/cf/als/v1\_20251127/}
+\begin{itemize}
+    \item \textbf{als\_U.npy} — user factors $(26000, 64)$
+    \item \textbf{als\_V.npy} — item factors $(2200, 64)$
+    \item \textbf{als\_params.json} — hyperparameters
+    \item \textbf{als\_metrics.json} — Recall@10, NDCG@10
+    \item \textbf{als\_metadata.json} — score ranges, BERT init info, git commit
+\end{itemize}
+
+\textbf{Mục đích:}
+\begin{itemize}
+    \item Tái lập mô hình (reproducibility)
+    \item So sánh version
+    \item Hỗ trợ Hybrid Reranking (chuẩn hóa CF scores)
+\end{itemize}
+\end{frame}
+
+
+%--------------------------------------------------
+\begin{frame}[plain]
+    \centering
+    {\Huge \textbf{4. HỆ THỐNG SERVICE VÀ HYBRID RERANKING}}
+\end{frame}
+%--------------------------------------------------
+
+
+%=======================================================
+\section{Serving và Hybrid Reranking}
+%=======================================================
+
+%=====================================================
+\section{Hệ thống Serving và Hybrid Reranking}
+%=====================================================
+
+%-----------------------------------------------------
+\begin{frame}{4.1 Kiến trúc Serving}
+\textbf{Yêu cầu hệ thống:}
+\begin{itemize}
+    \item Độ trễ P95 $<$ 100ms
+    \item Availability $\ge 99.9\%$
+    \item Throughput $\ge 100$ req/s
+\end{itemize}
+
+\textbf{Luồng xử lý (Latency Breakdown):}
+\[
+\text{Client} 
+\rightarrow \text{API Gateway (5ms)} 
+\rightarrow \text{User Router (10ms)}
+\rightarrow \text{Scoring Engine (50--80ms)}
+\rightarrow \text{Response (5ms)}
+\]
+
+\textbf{Thành phần chính:}
+\begin{itemize}
+    \item API Gateway: validation, auth, rate limit.
+    \item User Router: quyết định CF / Fallback.
+    \item Scoring Engine: CF scoring hoặc Content scoring.
+    \item Reranking: tích hợp multi-signal (nếu bật).
+\end{itemize}
+\end{frame}
+%-----------------------------------------------------
+
+%-----------------------------------------------------
+\begin{frame}{Kiến trúc Phân Tầng (Layered Architecture)}
+\begin{itemize}
+    \item L1: \textbf{API Layer} – FastAPI entrypoint
+    \item L2: \textbf{Business Logic} – Recommender, Fallback, Reranker, Cache
+    \item L3: \textbf{Search Layer} – PhoBERT semantic search
+    \item L4: \textbf{Configuration Layer}
+\end{itemize}
+
+\textbf{Nguyên tắc:}
+\begin{itemize}
+    \item Single Responsibility
+    \item Dependency Injection
+    \item Graceful degradation với multi-layer fallback
+\end{itemize}
+\end{frame}
+%-----------------------------------------------------
+
+%-----------------------------------------------------
+\begin{frame}{Serving: Model Management \& Hot Reload}
+\textbf{Model Registry:}
+\begin{itemize}
+    \item Quản lý nhiều version model (ALS/CF).
+    \item Chứa score-range, metadata, đường dẫn artifacts.
+\end{itemize}
+
+\textbf{Hot-Reload Protocol:}
+\begin{enumerate}
+    \item So sánh model hiện tại với registry.
+    \item Tải $U',V'$ mới.
+    \item Validate kích thước, score-range.
+    \item Atomic swap: $(U,V) \leftarrow (U',V')$.
+\end{enumerate}
+
+\textbf{Lợi ích:} Zero-downtime deployment.
+\end{frame}
+%-----------------------------------------------------
+
+%-----------------------------------------------------
+\begin{frame}{User Routing: Trainable vs Cold-start}
+\textbf{Phân đoạn người dùng:}
+\begin{itemize}
+    \item Trainable users (8.6\%): $|H_u|\ge 2$ và có rating $\ge 4$.
+    \item Cold-start users (91.4\%): còn lại.
+\end{itemize}
+
+\textbf{Routing rule:}
+\[
+path(u) = 
+\begin{cases}
+\text{CF Path}, & \text{nếu user trainable} \\
+\text{Fallback Path}, & \text{ngược lại}
+\end{cases}
+\]
+
+\textbf{Ý nghĩa:}
+\begin{itemize}
+    \item CF chỉ dùng cho user đủ dữ liệu.
+    \item Cold-start ưu tiên Content + Popularity.
+\end{itemize}
+\end{frame}
+%-----------------------------------------------------
+
+%-----------------------------------------------------
+\begin{frame}{CF Path: Scoring Pipeline}
+\textbf{6 bước xử lý:}
+\begin{enumerate}
+    \item Index mapping user $\rightarrow u_{\text{cf}}$
+    \item CF scoring: $ \hat{r}_{ui}=u^\top v_i $
+    \item Seen-item filtering
+    \item Attribute filtering
+    \item Top-K (lấy 5K nếu có reranking)
+    \item Hybrid Reranking
+\end{enumerate}
+
+\textbf{Độ phức tạp:}
+\[
+O(d \cdot |I|),\quad d=embedding\ dimension
+\]
+\end{frame}
+%-----------------------------------------------------
+
+%-----------------------------------------------------
+\begin{frame}{Fallback Path: Content-based + Popularity}
+\textbf{Score components:}
+\[
+s_{\text{content}}(u,i)=\cos(\tilde e_u,\tilde e_i)
+\]
+\[
+s_{\text{pop}}(i)=\frac{\log(1+\text{sold}_i)}
+{\max_j\log(1+\text{sold}_j)}
+\]
+
+\textbf{Hybrid score:}
+\[
+S_{\text{fallback}}(u,i)
+=0.7\,s_{\text{content}}+0.3\,s_{\text{pop}}
+\]
+
+\textbf{New user ($m=0$):} chỉ dùng popularity.
+\end{frame}
+%-----------------------------------------------------
+
+%-----------------------------------------------------
+\begin{frame}{Performance Optimization \& Fallback}
+\textbf{Caching:}
+\begin{itemize}
+    \item Popular items cache: top-50
+    \item User profile cache (LRU)
+    \item Similarity cache (2,500 pairs)
+\end{itemize}
+
+\textbf{Batch processing:}
+\[
+\hat R_{\text{batch}} = U_{\text{batch}}V^\top
+\]
+
+\textbf{Fallback layers:}
+\begin{itemize}
+    \item CF lỗi → Content-based
+    \item PhoBERT lỗi → Popularity-only
+    \item Filter xoá hết items → Bỏ filter
+\end{itemize}
+\end{frame}
+%-----------------------------------------------------
+
+%=====================================================
+\section{Hybrid Reranking}
+%=====================================================
+
+%-----------------------------------------------------
+\begin{frame}{Tổng quan Hybrid Reranking}
+\textbf{Mục tiêu:}
+\begin{itemize}
+    \item Tối ưu relevance (độ phù hợp)
+    \item Tăng diversity (đa dạng)
+    \item Kết hợp nhiều tín hiệu scoring
+\end{itemize}
+
+\textbf{Input:} Candidate set $C_u$ từ CF hoặc Fallback.
+
+\textbf{Output:} Top-$K$ danh sách cuối cùng.
+\end{itemize}
+\end{frame}
+%-----------------------------------------------------
+
+%-----------------------------------------------------
+\begin{frame}{4 Tín hiệu chính (Normalized to [0,1])}
+\begin{itemize}
+    \item \textbf{1. CF score} – từ $u^\top v_i$
+    \item \textbf{2. Content score} – cosine similarity
+    \item \textbf{3. Popularity} – log-normalized
+    \item \textbf{4. Quality signals} – rating, CTR, stability
+\end{itemize}
+
+\textbf{Hybrid score tổng quát:}
+\[
+S(u,i)=
+w_{cf}s_{cf}+w_{content}s_{content}
++w_{pop}s_{pop}+w_qs_q
+\]
+\end{frame}
+%-----------------------------------------------------
+
+%-----------------------------------------------------
+\begin{frame}{Diversity Re-ranking}
+\textbf{Phương pháp: Maximal Marginal Relevance (MMR)}
+\[
+\text{MMR}(i)=
+\lambda S(u,i)
+-(1-\lambda)\max_{j\in R}\text{sim}(i,j)
+\]
+
+\textbf{Ý nghĩa:}
+\begin{itemize}
+    \item $\lambda$ cao → ưu tiên relevance
+    \item $\lambda$ thấp → ưu tiên diversity
+\end{itemize}
+\end{frame}
+%-----------------------------------------------------
+
+%=====================================================
+\section{Smart Search Integration}
+%=====================================================
+
+%-----------------------------------------------------
+\begin{frame}{4.3 Smart Search Integration}
+\textbf{Smart Search sử dụng:}
+\begin{itemize}
+    \item PhoBERT Embeddings
+    \item Metadata + caching dùng chung với Serving
+\end{itemize}
+
+\textbf{Luồng tích hợp:}
+\[
+\text{CF/Fallback Output}
+\rightarrow \text{Hybrid Reranking}
+\rightarrow \text{Response}
+\]
+\[
+\text{Smart Search Output}
+\longrightarrow \text{Hybrid Reranking}
+\]
+
+\textbf{Lợi ích:}
+\begin{itemize}
+    \item Một pipeline thống nhất cho search + recommend
+    \item Tối ưu reuse caching, model loading, monitoring
+\end{itemize}
+\end{frame}
+%-----------------------------------------------------
+
+%=======================================================
+%======================
+
+%--------------------------------------------------
+\begin{frame}[plain]
+    \centering
+    {\Huge \textbf{5. ĐÁNH GIÁ VÀ THỰC NGHIỆM}}
+\end{frame}
+%--------------------------------------------------
+
+\section{Đánh giá và Thực nghiệm}
+%======================
+
+%--------------------------------------------------
+\begin{frame}{F.1 Kết quả Thực nghiệm – So sánh CF Models}
+\begin{itemize}
+    \item \textbf{BERT-ALS} đạt Recall@10 cao nhất: \textbf{0.1888} 
+    \begin{itemize}
+        \item +243.6\% so với Popularity baseline.
+        \item Improving cả Recall và NDCG so với ALS.
+    \end{itemize}
+
+    \item \textbf{Tất cả mô hình CF} đều vượt trội hơn baseline (p < 0.05).
+
+    \item \textbf{BPR}: coverage cao nhất (68.5\%), nhưng Recall thấp hơn ALS/BERT-ALS.
+
+    \item \textbf{Cold-Aug variants}: Recall tốt nhưng NDCG thấp (~0.085) → ranking quality giảm.
+\end{itemize}
+\end{frame}
+%--------------------------------------------------
+
+
+%--------------------------------------------------
+\begin{frame}{5.1 Kết quả Thực nghiệm – Cải thiện so với Baseline}
+\textbf{Cải thiện Recall@10 so với Popularity Baseline:}
+
+\begin{itemize}
+    \item \textbf{BERT-ALS (best)}: +243.6\% (cao nhất)
+    \item ALS checkpoint: +235.2\%
+    \item ALS artifact: +232.6\%
+    \item BPR advanced: +87.2\%
+\end{itemize}
+
+\textbf{Nhận xét:}
+\begin{itemize}
+    \item Kết quả vượt mục tiêu đề ra: Recall@10 \textgreater 0.20 (đạt 0.1888 ≈ mục tiêu).
+    \item BERT initialization mang lại lợi thế mạnh khi dữ liệu sparse + domain-specific.
+\end{itemize}
+\end{frame}
+%--------------------------------------------------
+
+
+%--------------------------------------------------
+\begin{frame}{So sánh ALS vs BERT-ALS}
+\begin{itemize}
+    \item Recall@10: tăng +2.5\% (0.1842 → 0.1888)
+    \item NDCG@10: tăng +1.2\%
+    \item Coverage: giảm mạnh (-63.4\%)
+    \item Diversity: giảm (-55.3\%)
+\end{itemize}
+
+\textbf{Trade-off:}
+\begin{itemize}
+    \item Accuracy ↑ nhưng Coverage/Diversity ↓
+    \item Nguyên nhân: BERT embeddings ưu tiên các item tương đồng về ngữ nghĩa
+\end{itemize}
+\end{frame}
+%--------------------------------------------------
+
+
+%--------------------------------------------------
+\begin{frame}{ Hiệu quả Hybrid Reranking}
+\textbf{Kết quả:}
+\begin{itemize}
+    \item \textbf{Recall@20 tăng}: +9.2\% → cải thiện long-tail.
+    \item \textbf{Recall@10 giảm nhẹ}: -1.8\% (không có ý nghĩa thống kê).
+    \item \textbf{Diversity giảm}: -2.2\%.
+    \item \textbf{Coverage giảm}: -41.1\%.
+    \item \textbf{Latency}: tăng từ 0.56ms → 2.72ms (vẫn < 10ms).
+\end{itemize}
+
+\textbf{Kết luận:}
+\begin{itemize}
+    \item Hybrid không cải thiện đáng kể so với CF-only vì CF đã tích hợp content signal từ BERT.
+    \item Hybrid phù hợp cho: long-tail (K lớn), cold-start users.
+\end{itemize}
+\end{frame}
+%--------------------------------------------------
+
+
+
+%======================
+\begin{frame}{F.2 Phân tích Chi tiết – Coverage vs Recall Trade-off}
+\begin{itemize}
+    \item \textbf{BERT-ALS}: Recall cao nhất nhưng Coverage thấp → phù hợp accuracy-first.
+    \item \textbf{ALS}: Recall 0.18 + Coverage 0.59 → cân bằng, tốt cho production stable.
+    \item \textbf{BPR}: Coverage 0.69 (cao nhất), nhưng Recall thấp.
+    \item Lựa chọn mô hình phụ thuộc: \textbf{Accuracy vs Diversity}.
+\end{itemize}
+\end{frame}
+%======================
+
+
+%--------------------------------------------------
+\begin{frame}{Hiệu quả của BERT Initialization}
+\begin{itemize}
+    \item Recall@10 +2.5\% so với ALS.
+    \item Giảm cold-start cho sản phẩm mới.
+    \item Embeddings có ngữ nghĩa từ đầu → tốt cho domain mỹ phẩm Việt Nam.
+    \item SVD projection (1024 → 64 dims) giữ lại 64.9\% variance.
+\end{itemize}
+\end{frame}
+%--------------------------------------------------
+
+
+
+%--------------------------------------------------
+\begin{frame}{Phân tích Cold-Augmented Models}
+\begin{itemize}
+    \item Cold-Aug models: Recall tốt nhưng NDCG thấp (~0.085).
+    \item Nguyên nhân: Augmentation tạo noise → các item đúng nhưng thứ tự không tối ưu.
+    \item Hướng cải tiến: weighted loss, augmentation chọn lọc.
+\end{itemize}
+\end{frame}
+%--------------------------------------------------
+
+
+
+%--------------------------------------------------
+\begin{frame}{Phân khúc người dùng và hiệu suất hệ thống}
+\textbf{User Segmentation:}
+\begin{itemize}
+    \item Trainable users (≥ 2 interactions): 8.7\%
+    \item Cold-start users (< 2 interactions): 91.3\%
+\end{itemize}
+
+\textbf{System Performance:}
+\begin{itemize}
+    \item Data processing: < 1 phút
+    \item ALS training (15 iters): 1–2 phút
+    \item CF serving latency: 6.4 ms
+    \item Hybrid serving latency: 43.3 ms
+\end{itemize}
+\end{frame}
+%--------------------------------------------------
+
+
+
+%======================
+\begin{frame}{5.3 Thảo luận – Điểm mạnh}
+\begin{itemize}
+    \item Cải thiện lớn: BERT-ALS tăng 243.6\% so với baseline.
+    \item Tất cả mô hình có ý nghĩa thống kê (p < 0.05).
+    \item Nhiều lựa chọn model cho accuracy/diversity.
+    \item Latency < 50ms – đáp ứng real-time.
+    \item Hệ thống mở rộng tốt (modular, scalable).
+\end{itemize}
+\end{frame}
+%======================
+
+
+%--------------------------------------------------
+\begin{frame}{5.3 Thảo luận – Hạn chế}
+\begin{itemize}
+    \item Sparsity cao: 91\% user cold-start.
+    \item Rating skew: 95\% điểm là 5 sao.
+    \item Coverage thấp cho BERT-ALS (21.2\%).
+    \item Cold-Aug: NDCG thấp, cần tối ưu.
+    \item Hybrid không hiệu quả cho trainable users.
+\end{itemize}
+\end{frame}
+%--------------------------------------------------
+
+
+
+%--------------------------------------------------
+\begin{frame}{5.3 Thảo luận – Hướng cải tiến}
+\begin{itemize}
+    \item Contrastive learning cho embeddings.
+    \item Knowledge graph cho cold-start.
+    \item Cache similarity để giảm latency.
+    \item Tối ưu chiến lược Cold-Augmentation.
+    \item A/B testing trên real users.
+\end{itemize}
+\end{frame}
+%--------------------------------------------------
+
+%--------------------------------------------------
+\begin{frame}[plain]
+    \centering
+    {\Huge \textbf{6. KẾT LUẬN VÀ HƯỚNG PHÁT TRIỂN}}
+\end{frame}
+%--------------------------------------------------
+
+
+
+%=======================================================
+%======================
+\section{Kết luận và Hướng phát triển}
+%======================
+
+%--------------------------------------------------
+\begin{frame}{6.1 Kết luận}
+\textbf{Hệ thống đã giải quyết thành công các thách thức chính:}
+\begin{enumerate}
+    \item \textbf{Dữ liệu thưa (Sparsity):} Dual-path routing: CF cho trainable users, content-based fallback (PhoBERT + popularity) cho cold-start users. \textbf{100\% requests được phục vụ.}
+    \item \textbf{Rating skew:} Sentiment-enhanced confidence score giúp phân biệt các tương tác thực sự tích cực.
+    \item \textbf{Ngữ nghĩa tiếng Việt:} BERT Initialization (PhoBERT embeddings) cải thiện cold-start và chất lượng embeddings latent.
+    \item \textbf{Kiến trúc production-ready:} Latency P95 < 100ms, availability ≥ 99.9\%, pipeline tự động đảm bảo data freshness và model updates.
+\end{enumerate}
+\end{frame}
+%--------------------------------------------------
+
+
+%--------------------------------------------------
+\begin{frame}{6.2 Hướng phát triển}
+\textbf{Ngắn hạn:}
+\begin{itemize}
+    \item A/B Testing Framework: đánh giá hiệu quả reranking (CTR, conversion rate).
+    \item Real-time Features: tích hợp session-based signals (recently viewed, cart items) vào scoring.
+\end{itemize}
+
+\textbf{Trung hạn:}
+\begin{itemize}
+    \item Graph Neural Networks: mô hình hóa quan hệ user-item-attribute (heterogeneous graph).
+    \item Multi-task Learning: đồng thời tối ưu click prediction và purchase prediction.
+\end{itemize}
+
+\textbf{Dài hạn:}
+\begin{itemize}
+    \item Reinforcement Learning: contextual bandits hoặc Q-learning để học policy gợi ý tối ưu theo thời gian thực.
+    \item Explainable Recommendations: sinh giải thích tự nhiên cho từng gợi ý dựa trên LLM.
+\end{itemize}
+\end{frame}
+%--------------------------------------------------
+%--------------------------------------------------
+\begin{frame}[plain]
+    \centering
+    {\Huge \textbf{Cảm ơn thầy và các bạn đã lắng nghe!}}
+\end{frame}
+%--------------------------------------------------
+
+
+\end{document}
+

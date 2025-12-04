@@ -1,0 +1,767 @@
+% -----------------------------------------------------------------
+% 7.2 Automation Pipeline
+%
+% File tham chiếu:
+%   - automation/scheduler.py: APScheduler orchestration
+%   - automation/data_refresh.py: Data pipeline với incremental updates
+%   - automation/bert_embeddings.py: Vietnamese Embedding refresh
+%   - automation/model_training.py: ALS/BPR training với warm-start
+%   - automation/model_deployment.py: Zero-downtime deployment
+%   - automation/health_check.py: Component health monitoring
+%   - scripts/utils.py: PipelineTracker, PipelineLock, retry decorator
+%   - config/scheduler_config.json: Task configuration
+%
+% Văn phong: Kỹ sư MLOps - tập trung vào orchestration, scheduling, reliability
+% Tổ chức: Pipeline Overview → Components → Scheduling → Error Handling
+
+\textit{Automation Pipeline là hệ thống điều phối (orchestration) các tác vụ ML
+theo lịch trình định sẵn, đảm bảo dữ liệu và mô hình luôn được cập nhật mà không
+cần can thiệp thủ công. Phần này trình bày kiến trúc pipeline, các thành phần chính,
+và cơ chế xử lý lỗi.}
+
+% ===================================================================
+\subsubsection*{Tổng quan quy trình (Pipeline Overview)}
+% ===================================================================
+
+Automation Pipeline bao gồm 6 tác vụ được orchestrate bởi \texttt{APScheduler}
+(\texttt{BlockingScheduler} với \texttt{CronTrigger}), chạy trong Docker container riêng biệt:
+
+\begin{figure}[H]
+    \centering
+    \footnotesize
+\begin{verbatim}
++----------------+     +---------------------+     +----------------+
+|  Data Refresh  | --> | Vietnamese Embedding| --> | Model Training |
+|    (Daily)     |     |     (Tuesday)       |     |   (Sunday)     |
++----------------+     +---------------------+     +-------+--------+
+                                                           |
++----------------+     +----------------+     +------------v---+
+| Health Check   | <-- | Drift Detection| <-- |   Deployment   |
+|  (Hourly :30)  |     |  (Daily 8:30)  |     |   (Daily 5AM)  |
++----------------+     +----------------+     +----------------+
+\end{verbatim}
+    \caption{Luồng dữ liệu giữa các tác vụ trong Automation Pipeline.}
+    \label{fig:automation_pipeline}
+\end{figure}
+
+\textbf{Nguyên tắc thiết kế}:
+\begin{itemize}
+  \item \textbf{Idempotency}: Mỗi tác vụ có thể chạy lại nhiều lần mà không gây side effects
+  (hash-based change detection).
+  \item \textbf{Isolation}: Mỗi tác vụ chạy trong subprocess riêng (\texttt{subprocess.run}),
+  không chia sẻ state, timeout 1 giờ.
+  \item \textbf{Observability}: \texttt{PipelineTracker} lưu metrics vào SQLite
+  (\texttt{logs/pipeline\_metrics.db}), structured logging với JSON metadata.
+  \item \textbf{Fail-fast with retry}: \texttt{@retry} decorator với exponential backoff
+  (\texttt{max\_attempts=3}, \texttt{backoff\_factor=2.0}).
+  \item \textbf{Concurrency Control}: \texttt{PipelineLock} file-based lock ngăn concurrent runs,
+  auto-cleanup stale locks sau 24 giờ.
+\end{itemize}
+
+% ===================================================================
+\subsubsection*{Thành phần 1: Data Refresh}
+% ===================================================================
+
+Data Refresh (\texttt{automation/data\_refresh.py}) chịu trách nhiệm cập nhật
+dữ liệu đã xử lý khi raw data thay đổi. Hỗ trợ hai chế độ: \textbf{Incremental} (nhanh)
+và \textbf{Full} (toàn bộ).
+
+\paragraph{Quy trình thực thi.}
+
+\begin{enumerate}
+  \item \textbf{Staging Merge}: Merge dữ liệu mới từ web ingestion
+  (\texttt{data/staging/new\_interactions.csv}) vào raw data.
+  \begin{itemize}
+    \item Backup raw file trước merge
+    \item Map staging columns: \texttt{timestamp} $\rightarrow$ \texttt{cmt\_date}
+    \item Remove duplicates (same user\_id, product\_id, cmt\_date)
+    \item Archive staging file sau merge
+  \end{itemize}
+  
+  \item \textbf{Change Detection}: Tính hash của raw CSV files, so sánh với hash lưu trong
+  \texttt{user\_item\_mappings.json}.
+  \[
+    \texttt{hash}_{\text{current}} = \texttt{MD5}(\texttt{raw\_files})
+  \]
+  Nếu $\texttt{hash}_{\text{current}} = \texttt{hash}_{\text{previous}}$ và không có flag
+  \texttt{--force}: Skip pipeline.
+  
+  \item \textbf{Mode Selection}: Chọn incremental hoặc full pipeline:
+  \begin{itemize}
+    \item \textbf{Incremental}: Khi $\leq 100$ interactions mới và có processed data trước đó.
+    Chỉ update sparse matrices cho trainable users, skip cold-start users.
+    \item \textbf{Full}: Khi $> 100$ interactions mới, có $> 50$ pending trainable users,
+    hoặc \texttt{--force-full} flag.
+  \end{itemize}
+  
+  \item \textbf{AI-Powered Quality Scoring}: Sử dụng \texttt{FeatureEngineer} với ViSoBERT
+  để tính \texttt{comment\_quality\_score}. Cache scores trong
+  \texttt{all\_quality\_scores\_cache.parquet} để tránh recompute.
+  
+  \item \textbf{Output Verification}: Kiểm tra 9 output files tồn tại và valid:
+  \begin{itemize}
+    \item \texttt{interactions.parquet}, \texttt{all\_quality\_scores\_cache.parquet}
+    \item \texttt{X\_train\_confidence.npz}, \texttt{X\_train\_binary.npz}
+    \item \texttt{user\_item\_mappings.json}, \texttt{user\_metadata.pkl}
+    \item \texttt{user\_pos\_train.pkl}, \texttt{user\_hard\_neg\_train.pkl}, \texttt{data\_stats.json}
+  \end{itemize}
+\end{enumerate}
+
+\paragraph{Incremental Update Logic.}
+
+Incremental update chỉ áp dụng khi:
+\begin{itemize}
+  \item User đã có trong matrix (\texttt{u\_idx < matrix\_num\_users})
+  \item Item đã có trong matrix (\texttt{i\_idx < matrix\_num\_items})
+  \item Số new users $\leq 10$ và new items $\leq 5$
+\end{itemize}
+
+\begin{verbatim}
+# Incremental: Convert to LIL format for efficient updates
+X_conf_lil = X_train_conf.tolil()
+for upd in updates:
+    confidence = rating + comment_quality  # AI-powered scoring
+    X_conf_lil[u_idx, i_idx] = max(existing, confidence)
+    if is_positive:
+        user_pos_train[u_idx].add(i_idx)
+\end{verbatim}
+
+\paragraph{Retry Strategy.}
+
+Sử dụng exponential backoff với tối đa 3 lần retry (\texttt{@retry} decorator):
+\[
+  T_{\text{wait}}(n) = T_{\text{base}} \times 2^{n-1}, \quad n \in \{1, 2, 3\}
+\]
+với $T_{\text{base}} = 1$ giây, $\texttt{backoff\_factor} = 2.0$.
+
+\paragraph{Concurrency Control.}
+
+Sử dụng file-based lock (\texttt{PipelineLock}) để ngăn chặn concurrent runs.
+Lock files được lưu trong \texttt{logs/locks/} với auto-cleanup sau 24 giờ:
+\begin{verbatim}
+with PipelineLock("data_refresh") as lock:
+    if not lock.acquired:
+        return {"status": "skipped", "reason": "already_running"}
+    run_id = tracker.start_run("data_refresh", {"force": force})
+    # Execute pipeline...
+    tracker.complete_run(run_id, {"status": "success", "files": 9})
+\end{verbatim}
+
+% ===================================================================
+\subsubsection*{Thành phần 2: Vietnamese Embedding Refresh}
+% ===================================================================
+
+Cập nhật Vietnamese Embedding cho catalog sản phẩm (\texttt{automation/bert\_embeddings.py}).
+
+\paragraph{Trigger Conditions.}
+\begin{itemize}
+  \item \textbf{Scheduled}: Weekly (Tuesday, 3:00 AM) --- sau Data Refresh đầu tuần.
+  \item \textbf{Freshness Check}: Skip nếu embeddings age $< 7$ ngày (trừ khi \texttt{--force}).
+  \item \textbf{Manual}: \texttt{python -m automation.bert\_embeddings --force}.
+\end{itemize}
+
+\paragraph{Configuration.}
+\begin{verbatim}
+BERT_CONFIG = {
+    "model_name": "AITeamVN/Vietnamese_Embedding",
+    "batch_size": 32,
+    "max_length": 512,
+    "device": "cuda" if torch.cuda.is_available() else "cpu",
+}
+\end{verbatim}
+
+\paragraph{Quy trình.}
+\begin{enumerate}
+  \item Load product metadata từ \texttt{data\_product.csv}.
+  \item Concatenate text fields với \texttt{[SEP]} separator:
+  \begin{verbatim}
+text = f"{product_name} [SEP] {processed_description} [SEP] {feature}"
+  \end{verbatim}
+  \item Tokenize và encode qua Vietnamese Embedding (\texttt{AITeamVN/Vietnamese\_Embedding}).
+  \item Apply mean pooling để tạo sentence embedding (1024-dim) cho mỗi sản phẩm,
+  batch processing với \texttt{batch\_size=32}.
+  \item Save sang \texttt{product\_embeddings.pt} với metadata.
+\end{enumerate}
+
+\paragraph{Output Format.}
+\begin{verbatim}
+torch.save({
+    "product_ids": product_ids,        # List of product IDs
+    "embeddings": embedding_tensor,    # Tensor (num_products, 1024)
+    "metadata": {
+        "model_name": "AITeamVN/Vietnamese_Embedding",
+        "embedding_dim": 1024,
+        "num_products": num_products,
+    },
+}, output_file)
+\end{verbatim}
+
+% ===================================================================
+\subsubsection*{Thành phần 3: Model Training}
+% ===================================================================
+
+Huấn luyện mô hình CF (ALS hoặc BPR) trên dữ liệu mới nhất
+(\texttt{automation/model\_training.py}).
+
+\paragraph{Features.}
+\begin{itemize}
+  \item \textbf{Warm-start}: Khởi tạo từ model trước (incremental training), chỉ 5 iterations.
+  \item \textbf{BERT Initialization}: Cold items (< 5 interactions) được khởi tạo
+  bằng Vietnamese Embedding (1024-dim) projected xuống 64-dim qua SVD.
+  \item \textbf{Early Stopping} (BPR): Patience = 5, min\_delta = 0.001 trên validation Recall@10.
+  \item \textbf{Checkpointing}: Save checkpoint mỗi 5 iterations, giữ 3 checkpoints gần nhất.
+  \item \textbf{Popularity Baseline}: Tự động so sánh với baseline để validate improvement.
+\end{itemize}
+
+\paragraph{ALS Configuration.}
+\begin{verbatim}
+TRAINING_CONFIG["als"] = {
+    "factors": 64,
+    "regularization": 0.1,       # Higher due to sparsity
+    "iterations": 15,
+    "alpha": 5,                  # Confidence weight (1-6 range)
+    "use_bert_init": False,      # Only for cold-start items
+    "bert_init_cold_threshold": 5,
+}
+\end{verbatim}
+
+\paragraph{BPR Configuration.}
+\begin{verbatim}
+TRAINING_CONFIG["bpr"] = {
+    "factors": 64,
+    "learning_rate": 0.05,
+    "regularization": 0.0001,
+    "epochs": 50,
+    "neg_sample_ratio": 0.3,     # 30% hard negatives
+}
+\end{verbatim}
+
+\paragraph{Quy trình.}
+
+\begin{enumerate}
+  \item \textbf{Load Training Data}: Đọc sparse matrices và user sets từ
+  \texttt{data/processed/}.
+  
+  \item \textbf{Compute Baseline}: Tính popularity baseline (top-K popular items)
+  để so sánh sau training.
+  
+  \item \textbf{Validation Split}: 10\% của training data cho early stopping (BPR).
+  
+  \item \textbf{Train Model}: Gọi \texttt{train\_als\_model()} hoặc \texttt{train\_bpr\_model()}
+  với hyperparameters từ config.
+  
+  \item \textbf{BERT Init cho Cold Items}:
+  \begin{verbatim}
+cold_mask = item_counts < 5  # Cold items
+projected = project_bert_to_factors(bert_embeddings, 64)
+model.item_factors[cold_mask] = projected[cold_mask]
+  \end{verbatim}
+  
+  \item \textbf{Evaluate}: Tính Recall@K và NDCG@K trên test set, so sánh với baseline.
+  
+  \item \textbf{Save Artifacts}: Lưu embeddings (U, V), params, metrics, metadata vào
+  \texttt{artifacts/cf/\{model\_type\}/\{timestamp\}/}.
+  
+  \item \textbf{Register to Registry}: Cập nhật \texttt{registry.json} với model mới.
+  
+  \item \textbf{Auto-select}: Nếu flag \texttt{--auto-select}, so sánh với
+  \texttt{current\_best} và tự động promote nếu metrics tốt hơn.
+\end{enumerate}
+
+\paragraph{Auto-selection Logic.}
+
+\[
+  \texttt{promote} = \texttt{metrics}_{\text{new}}[\texttt{recall@10}] > 
+                     \texttt{metrics}_{\text{best}}[\texttt{recall@10}]
+\]
+
+Nếu $\texttt{promote} = \texttt{true}$: Cập nhật \texttt{registry.current\_best}
+và set \texttt{is\_active = true}.
+
+\paragraph{Artifact Structure.}
+
+\begin{verbatim}
+artifacts/cf/als/20251127_030000/
+├── als_U.npy              # User factors (num_users, 64)
+├── als_V.npy              # Item factors (num_items, 64)
+├── als_params.json        # Hyperparameters, training time
+├── als_metrics.json       # Recall@K, NDCG@K, baseline_improvement_pct
+└── als_metadata.json      # model_id, data_hash, git_commit, score_range
+\end{verbatim}
+
+% ===================================================================
+\subsubsection*{Thành phần 4: Model Deployment}
+% ===================================================================
+
+Deploy model mới lên serving layer mà không gây downtime
+(\texttt{automation/model\_deployment.py}).
+
+\paragraph{Configuration.}
+\begin{verbatim}
+DEPLOY_CONFIG = {
+    "registry_path": "artifacts/cf/registry.json",
+    "service_url": os.environ.get("SERVICE_URL", "http://localhost:8000"),
+    "health_check_timeout": 30,
+    "reload_timeout": 60,
+    "deployment_history_path": "logs/deployment_history.json",
+}
+\end{verbatim}
+
+\paragraph{Quy trình.}
+
+\begin{enumerate}
+  \item \textbf{Load Registry}: Đọc \texttt{registry.json}, xác định model cần deploy:
+  \begin{itemize}
+    \item Mặc định: \texttt{current\_best} từ registry
+    \item Rollback: Lấy model trước \texttt{current\_best} (sorted by \texttt{registered\_at})
+    \item Explicit: \texttt{--model-id} flag
+  \end{itemize}
+  
+  \item \textbf{Health Check}: Verify service đang chạy qua \texttt{GET /health}.
+  Nếu offline, chỉ update registry và đánh dấu \texttt{pending\_restart}.
+  
+  \item \textbf{Trigger Reload}: Gọi \texttt{POST /reload\_model} với \texttt{model\_id}:
+  \begin{verbatim}
+requests.post(
+    f"{service_url}/reload_model",
+    json={"model_id": model_id},
+    timeout=60
+)
+  \end{verbatim}
+  
+  \item \textbf{Verify Deployment}: Xác nhận model đã được load đúng qua
+  \texttt{GET /model\_info}, so sánh \texttt{model\_id} trả về.
+  
+  \item \textbf{Update Registry}: Set \texttt{is\_active = true} cho deployed model,
+  \texttt{is\_active = false} cho các models khác.
+  
+  \item \textbf{Record History}: Lưu deployment event vào \texttt{deployment\_history.json}
+  (giữ 100 records gần nhất).
+\end{enumerate}
+
+\paragraph{Zero-Downtime Protocol.}
+
+\begin{verbatim}
+[Deployment Process - trong service/recommender.py]
+1. Service continues serving with old model
+2. Load new model into memory (parallel thread)
+3. Atomic pointer swap: old_model -> new_model
+4. Release old model memory (garbage collection)
+5. Log deployment event with metrics
+\end{verbatim}
+
+\paragraph{Rollback Strategy.}
+
+Nếu deployment fail hoặc verification không pass:
+\begin{verbatim}
+# CLI command for rollback
+python -m automation.model_deployment --rollback
+
+# Logic: Get previous model from sorted list
+previous_model = sorted_models[-2] if len(sorted_models) >= 2 else None
+\end{verbatim}
+
+\paragraph{Offline Service Handling.}
+
+Nếu service offline (\texttt{ConnectionError}):
+\begin{itemize}
+  \item Update registry \texttt{current\_best} và \texttt{is\_active}
+  \item Record deployment với status \texttt{"pending\_restart"}
+  \item Return \texttt{\{"status": "pending", "message": "..."}}
+\end{itemize}
+
+% ===================================================================
+\subsubsection*{Thành phần 5: Drift Detection}
+% ===================================================================
+
+Task Drift Detection (\texttt{automation/drift\_detection.py}) thực thi các kiểm tra trôi dạt dữ liệu
+dựa trên các chỉ số đã được định nghĩa chi tiết trong \textbf{mục 7.0.1 (Monitoring)}.
+Nếu phát hiện drift (\texttt{drift\_detected = true}), pipeline sẽ:
+\begin{itemize}
+  \item Gửi alert với severity \texttt{warning}
+  \item Lưu drift report vào \texttt{reports/drift/}
+  \item Tự động trigger training nếu \texttt{auto\_retrain} được bật
+\end{itemize}
+
+% ===================================================================
+\subsubsection*{Thành phần 6: Health Check}
+% ===================================================================
+
+Giám sát health của toàn bộ hệ thống (\texttt{automation/health\_check.py}).
+
+\paragraph{Components Checked.}
+\begin{itemize}
+  \item \textbf{Service}: API reachable (\texttt{GET /health}), model loaded,
+  timeout threshold = 10s.
+  \item \textbf{Data}: 7 required files exist, data freshness $< 7$ ngày,
+  data integrity (num\_users, num\_items, num\_interactions $> 0$).
+  \item \textbf{Models}: Registry exists, \texttt{current\_best} được define,
+  model files exist, model age $< 30$ ngày, Recall@10 $\geq 0.10$.
+  \item \textbf{Pipelines}: Success rate qua 7 ngày, stale runs cleanup.
+  \item \textbf{Embeddings}: Vietnamese Embedding file exists (\texttt{product\_embeddings.pt}).
+\end{itemize}
+
+\paragraph{Check Functions.}
+\begin{verbatim}
+check_functions = {
+    "service": check_service_health,    # API + model status
+    "data": check_data_health,          # Files + freshness + integrity
+    "models": check_model_health,       # Registry + metrics
+    "pipelines": check_pipeline_health, # PipelineTracker stats
+}
+
+# Run all checks
+for component in ["service", "data", "models", "pipelines"]:
+    result["components"][component] = check_functions[component](logger)
+\end{verbatim}
+
+\paragraph{Health Status Levels.}
+\begin{center}
+\begin{tabular}{|l|l|l|}
+\hline
+\textbf{Status} & \textbf{Condition} & \textbf{Exit Code} \\
+\hline
+\texttt{healthy} & All checks pass & 0 \\
+\texttt{warning} & Non-critical checks fail (freshness, embeddings) & 1 \\
+\texttt{degraded} & Service timeout hoặc model not loaded & 1 \\
+\texttt{critical} & Missing files, registry invalid, API offline & 2 \\
+\hline
+\end{tabular}
+\end{center}
+
+\paragraph{Pipeline Health Tracking.}
+
+Sử dụng \texttt{PipelineTracker} để query statistics từ SQLite:
+\begin{verbatim}
+tracker = PipelineTracker()  # logs/pipeline_metrics.db
+stats = tracker.get_stats(days=7)
+# Returns: {"stats_by_pipeline": {
+#   "data_refresh": {"success": 5, "failed": 1, "success_rate": 0.83}
+# }}
+
+# Cleanup stale runs (running > 24h)
+stale_count = tracker.cleanup_stale_runs(max_running_hours=24)
+\end{verbatim}
+
+\paragraph{Alert Integration.}
+
+Nếu \texttt{overall\_status} là \texttt{warning} hoặc \texttt{critical}:
+\begin{verbatim}
+if send_alerts and result["overall_status"] in ("warning", "critical"):
+    send_pipeline_alert(
+        "health_check",
+        result["overall_status"],
+        f"Health check {result['overall_status']}: {failed_components}",
+        severity="error" if result["overall_status"] == "critical" else "warning"
+    )
+\end{verbatim}
+
+% ===================================================================
+\subsubsection*{Lịch trình thực thi (Scheduling)}
+% ===================================================================
+
+Sử dụng APScheduler với \texttt{CronTrigger} để định lịch. Configuration
+từ \texttt{config/scheduler\_config.json}:
+
+\begin{table}[H]
+\centering
+\small
+\begin{tabular}{|l|l|l|p{4.5cm}|}
+\hline
+\textbf{Task} & \textbf{Schedule} & \textbf{Cron Parameters} & \textbf{Rationale} \\
+\hline
+Data Refresh & Daily, 2:00 AM & \texttt{\{hour: 2, minute: 0\}} & Cập nhật sau business hours \\
+Vietnamese Embedding & Tuesday, 3:00 AM & \texttt{\{day\_of\_week: tue, hour: 3\}} & Sau data refresh đầu tuần \\
+Drift Detection & Daily, 8:30 AM & \texttt{\{hour: 8, minute: 30\}} & Phân tích dữ liệu buổi sáng \\
+Model Training & Sunday, 3:00 AM & \texttt{\{day\_of\_week: sun, hour: 3\}} & Low-traffic period \\
+Deployment & Daily, 5:00 AM & \texttt{\{hour: 5, minute: 0\}} & Sau training, trước peak hours \\
+Health Check & Hourly, :30 & \texttt{\{minute: 30\}} & Continuous monitoring \\
+\hline
+\end{tabular}
+\end{table}
+
+\paragraph{Scheduler Implementation.}
+
+\begin{verbatim}
+from apscheduler.schedulers.blocking import BlockingScheduler
+from apscheduler.triggers.cron import CronTrigger
+import pytz
+
+TIMEZONE = pytz.timezone(os.environ.get("TZ", "UTC"))
+
+scheduler = BlockingScheduler(timezone=TIMEZONE)
+
+for task_name, config in SCHEDULER_CONFIG.items():
+    if not config.get("enabled", True):
+        continue
+    
+    trigger = CronTrigger(**config["schedule"], timezone=TIMEZONE)
+    scheduler.add_job(
+        create_task_wrapper(task_name, config),
+        trigger=trigger,
+        id=task_name,
+        name=config["description"],
+        replace_existing=True,
+    )
+\end{verbatim}
+
+\paragraph{Task Execution.}
+
+Mỗi task chạy trong subprocess với timeout 1 giờ:
+\begin{verbatim}
+cmd = [sys.executable, "-m", config["module"]] + config.get("args", [])
+
+with open(log_file, "w") as f:
+    process = subprocess.run(
+        cmd,
+        cwd=str(PROJECT_DIR),
+        stdout=f,
+        stderr=subprocess.STDOUT,
+        timeout=3600,  # 1 hour timeout
+        env={**os.environ, "PYTHONPATH": str(PROJECT_DIR)},
+    )
+\end{verbatim}
+
+% ===================================================================
+\subsubsection*{Error Handling và Alerting}
+% ===================================================================
+
+\paragraph{Retry Decorator.}
+
+Mỗi tác vụ được wrap trong decorator \texttt{@retry} từ \texttt{scripts/utils.py}:
+\begin{verbatim}
+@retry(
+    max_attempts=3,
+    backoff_factor=2.0,
+    base_delay=1.0,
+    exceptions=(Exception,),
+    on_failure=lambda e, attempt: logging.warning(f"Attempt {attempt} failed: {e}")
+)
+def run_data_pipeline(logger):
+    # ... pipeline logic ...
+\end{verbatim}
+
+Chế độ backoff: $T_{\text{wait}} = 1.0 \times 2^{n-1}$ giây cho attempt thứ $n$.
+
+\paragraph{Alert Severity Mapping.}
+
+\begin{center}
+\begin{tabular}{|l|l|l|}
+\hline
+\textbf{Event} & \textbf{Severity} & \textbf{Action} \\
+\hline
+Task completed & \texttt{info} & Log only + optional email \\
+Task skipped (unchanged) & \texttt{info} & Log only \\
+Task retry & \texttt{warning} & Log + optional email \\
+Task failed (after retries) & \texttt{error} & Log + Email + Slack \\
+Critical health check fail & \texttt{critical} & Log + Email + Slack + PagerDuty \\
+\hline
+\end{tabular}
+\end{center}
+
+\paragraph{Alert Function.}
+
+\begin{verbatim}
+def send_pipeline_alert(
+    pipeline_name: str,
+    status: str,
+    message: str,
+    severity: str = "warning",
+    metadata: Optional[Dict] = None
+) -> None:
+    """Send alert via AlertManager."""
+    try:
+        from recsys.cf.alerting import AlertManager
+        alert_manager = AlertManager()
+        
+        full_message = f"""Pipeline: {pipeline_name}
+Status: {status}
+Time: {datetime.now().isoformat()}
+Message: {message}
+"""
+        alert_manager.send_alert(
+            subject=f"[Pipeline] {pipeline_name}: {status}",
+            message=full_message,
+            severity=severity
+        )
+    except ImportError:
+        logging.warning("AlertManager not available, logging instead")
+\end{verbatim}
+
+\paragraph{Pipeline Tracking.}
+
+Mỗi run được track bởi \texttt{PipelineTracker} trong SQLite:
+\begin{verbatim}
+tracker = PipelineTracker()  # -> logs/pipeline_metrics.db
+
+# Start run
+run_id = tracker.start_run("data_refresh", {"force": False})
+
+try:
+    # ... execute pipeline ...
+    tracker.complete_run(run_id, {"status": "success", "files": 9})
+except Exception as e:
+    tracker.fail_run(run_id, str(e))
+\end{verbatim}
+
+\paragraph{Task Status JSON.}
+
+Scheduler lưu trạng thái từng task vào \texttt{logs/scheduler/task\_status.json}:
+\begin{verbatim}
+{
+    "data_refresh": {
+        "status": "success",
+        "timestamp": "2025-11-27T02:01:45",
+        "exit_code": 0,
+        "log_file": "logs/scheduler/data_refresh_20251127_020000.log"
+    },
+    "health_check": {
+        "status": "success",
+        "timestamp": "2025-11-27T10:30:00",
+        "exit_code": 0
+    }
+}
+\end{verbatim}
+
+% ===================================================================
+\subsubsection*{Logging và Observability}
+% ===================================================================
+
+\paragraph{Log Directory Structure.}
+
+\begin{verbatim}
+logs/
+├── scheduler/
+│   ├── scheduler.log                      # Main scheduler log
+│   ├── task_status.json                   # Task status history
+│   ├── data_refresh_20251127_020000.log   # Per-task logs
+│   ├── training_20251126_030000.log
+│   └── health_check_20251127_*.log
+├── locks/
+│   └── data_refresh.lock                  # File-based locks
+├── pipelines/
+│   ├── data_refresh_20251127.log          # Daily pipeline logs
+│   └── model_training_20251127.log
+├── pipeline_metrics.db                    # SQLite tracking database
+└── deployment_history.json                # Deployment records (last 100)
+\end{verbatim}
+
+\paragraph{Log Format.}
+
+Sử dụng \texttt{setup\_logging()} từ \texttt{scripts/utils.py}:
+\begin{verbatim}
+2025-11-27 02:00:15 - data_refresh - INFO - Step 0: Merging staging data...
+2025-11-27 02:00:16 - data_refresh - INFO - Merged 45 new interactions
+2025-11-27 02:00:16 - data_refresh - INFO - Checking for data changes...
+2025-11-27 02:00:16 - data_refresh - INFO - Current raw data hash: a1b2c3d4...
+2025-11-27 02:00:17 - data_refresh - INFO - Using INCREMENTAL mode for 45 new...
+2025-11-27 02:01:45 - data_refresh - INFO - Incremental update completed in 88.2s
+\end{verbatim}
+
+\paragraph{SQLite Metrics Database.}
+
+Schema cho \texttt{logs/pipeline\_metrics.db}:
+\begin{verbatim}
+CREATE TABLE pipeline_runs (
+    run_id TEXT PRIMARY KEY,          -- e.g., "data_refresh_20251127_020015_1234"
+    pipeline_name TEXT NOT NULL,       -- e.g., "data_refresh"
+    status TEXT NOT NULL,              -- running/success/failed/cancelled
+    started_at TEXT NOT NULL,          -- ISO8601 timestamp
+    finished_at TEXT,
+    duration_seconds REAL,
+    error_message TEXT,
+    metadata TEXT                      -- JSON: {"force": false, "files": 9, ...}
+);
+
+CREATE INDEX idx_pipeline_name_status ON pipeline_runs(pipeline_name, status);
+CREATE INDEX idx_started_at ON pipeline_runs(started_at);
+\end{verbatim}
+
+\paragraph{Deployment History.}
+
+Lưu lịch sử deployment trong \texttt{logs/deployment\_history.json}:
+\begin{verbatim}
+{
+  "deployments": [
+    {
+      "model_id": "als_20251127_030000",
+      "deployed_at": "2025-11-27T05:00:15",
+      "status": "success",
+      "git_commit": "abc123",
+      "metadata": {
+        "metrics": {"recall@10": 0.188},
+        "reload_response": {"status": "ok"}
+      }
+    }
+  ]
+}
+\end{verbatim}
+
+% ===================================================================
+\subsubsection*{Docker Deployment}
+% ===================================================================
+
+Scheduler chạy trong container riêng, phụ thuộc vào API service.
+Configuration từ \texttt{docker-compose.yml}:
+
+\begin{verbatim}
+scheduler:
+  image: viecomrec:latest
+  container_name: viecomrec-scheduler
+  volumes:
+    - ./data:/app/data
+    - ./artifacts:/app/artifacts
+    - ./logs:/app/logs
+    - ./config:/app/config
+  environment:
+    - SERVICE_URL=http://viecomrec-api:8000
+    - TZ=Asia/Ho_Chi_Minh
+    - PROJECT_DIR=/app
+  command: python -m automation.scheduler
+  depends_on:
+    api:
+      condition: service_healthy
+  restart: unless-stopped
+\end{verbatim}
+
+\paragraph{Environment Variables.}
+\begin{itemize}
+  \item \texttt{SERVICE\_URL}: URL của API service cho health check và deployment.
+  \item \texttt{TZ}: Timezone cho scheduler (\texttt{pytz.timezone}).
+  \item \texttt{PROJECT\_DIR}: Root directory cho paths.
+\end{itemize}
+
+\paragraph{CLI Commands.}
+
+\begin{verbatim}
+# Start scheduler with dependencies
+docker compose up -d scheduler
+
+# View scheduler logs (follow mode)
+docker logs -f viecomrec-scheduler
+
+# Manual trigger (for testing)
+docker exec viecomrec-scheduler python -m automation.data_refresh --force
+
+# Check task status
+docker exec viecomrec-scheduler cat logs/scheduler/task_status.json
+
+# Force full pipeline (skip incremental)
+docker exec viecomrec-scheduler python -m automation.data_refresh --force-full
+
+# Run health check with alerts
+docker exec viecomrec-scheduler python -m automation.health_check --alert
+\end{verbatim}
+
+\paragraph{Scheduler API Endpoints.}
+
+Scheduler cũng expose REST API (\texttt{service/scheduler\_api.py}) cho management:
+\begin{itemize}
+  \item \texttt{GET /scheduler/status}: Scheduler status và job overview.
+  \item \texttt{GET /scheduler/jobs}: List all scheduled jobs với next\_run, last\_status.
+  \item \texttt{POST /scheduler/jobs/\{job\_id\}/run}: Manual trigger một job.
+  \item \texttt{POST /scheduler/jobs/\{job\_id\}/enable|disable}: Enable/disable job.
+  \item \texttt{PUT /scheduler/jobs/\{job\_id\}/schedule}: Update job schedule.
+  \item \texttt{GET /scheduler/logs/\{task\_name\}}: Get logs cho một task.
+  \item \texttt{GET /scheduler/history}: Task execution history (paginated).
+\end{itemize}
