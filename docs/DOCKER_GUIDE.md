@@ -189,7 +189,7 @@ docker run -d -p 8000:8000 \
 ### Bước 1: Clone repository
 
 ```powershell
-git clone https://github.com/your-username/viecomrec.git
+git clone https://github.com/Hoang-k68a3hus/project_IAI.git
 cd viecomrec
 ```
 
