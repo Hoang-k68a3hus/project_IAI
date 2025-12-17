@@ -44,14 +44,13 @@ Trước khi chạy hệ thống, bạn cần tải các tài nguyên cần thi�
    - `artifacts/`: Chứa các model đã huấn luyện (ALS, BPR, BERT).
    - `logs/`: Chứa log hệ thống.
 
-link google drive project : 'https://drive.google.com/drive/folders/1O7zOjDmeI3UIuzDWgUqPdxolqvA22dCk?usp=sharing'
+[Link Google Drive project](https://drive.google.com/drive/folders/1O7zOjDmeI3UIuzDWgUqPdxolqvA22dCk?usp=sharing)
 
 
 2. **Hình ảnh sản phẩm**: Tải thư mục hình ảnh và đặt vào đường dẫn `web/server/public/`.
    - Điều này đảm bảo Web App hiển thị đúng hình ảnh sản phẩm.
 
-link google drive ảnh sản phẩm : 'https://drive.google.com/drive/folders/1iZDfws0YvNXEv9mwzIlGgxf2AzveVmqG?usp=sharing'
-
+[Link Google Drive ảnh sản phẩm](https://drive.google.com/drive/folders/1iZDfws0YvNXEv9mwzIlGgxf2AzveVmqG?usp=sharing)
 ## 🚀 Chạy Recommendation API (Docker)
 
 Bạn có thể chạy ngay lõi hệ thống gợi ý mà không cần cài đặt môi trường Python phức tạp.
