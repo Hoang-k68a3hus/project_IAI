@@ -845,8 +845,3 @@ for issue in health['issues']:
 
 ---
 
-## Changelog
-
-| Phiên bản | Ngày | Thay đổi |
-|-----------|------|----------|
-| 1.0.0 | 2025-11-30 | Phiên bản đầu tiên |
