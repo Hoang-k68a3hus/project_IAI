@@ -972,9 +972,3 @@ def check_hybrid_reranking_health():
 - [Automation Guide](./AUTOMATION_GUIDE.md)
 
 ---
-
-## Changelog
-
-| Phiên bản | Ngày | Thay đổi |
-|-----------|------|----------|
-| 1.0.0 | 2025-01-30 | Phiên bản đầu tiên |
