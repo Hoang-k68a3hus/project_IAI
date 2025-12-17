@@ -691,17 +691,3 @@ pyarrow>=12.0.0
 
 ---
 
-## Changelog
-
-### v1.0.0 (2025-01-30)
-- ✅ APScheduler với cron triggers
-- ✅ Data refresh với incremental update
-- ✅ Model training với BERT init, warm-start, early stopping
-- ✅ Model deployment với rollback
-- ✅ BERT embeddings refresh
-- ✅ Health check system
-- ✅ Drift detection
-- ✅ Cleanup pipeline
-- ✅ PipelineTracker (SQLite)
-- ✅ PipelineLock (file-based)
-- ✅ PowerShell management script
