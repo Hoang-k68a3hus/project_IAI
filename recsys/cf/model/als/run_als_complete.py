@@ -43,7 +43,7 @@ import json
 import pickle
 
 # Add project root to path
-project_root = Path(__file__).parent.parent
+project_root = Path(__file__).resolve().parents[4]
 sys.path.insert(0, str(project_root))
 
 # Import ALS modules
@@ -324,14 +324,14 @@ def initialize_als_model(
         >>> model = initialize_als_model(factors=64, alpha=10)
         >>> print(f"Model: {model}")
     """
-    initializer = ALSModelInitializer(
-        factors=factors,
-        regularization=regularization,
-        iterations=iterations,
-        alpha=alpha,
-        use_gpu=use_gpu,
-        random_seed=random_seed
-    )
+    initializer = ALSModelInitializer(config={
+        'factors': factors,
+        'regularization': regularization,
+        'iterations': iterations,
+        'alpha': alpha,
+        'use_gpu': use_gpu,
+        'random_state': random_seed,
+    })
     
     model = initializer.initialize_model()
     
@@ -364,7 +364,7 @@ def train_als_model(
     Example:
         >>> model = initialize_als_model()
         >>> trained_model, summary = train_als_model(model, X_train)
-        >>> print(f"Training time: {summary['training_time']:.2f}s")
+        >>> print(f"Training time: {summary['total_duration_seconds']:.2f}s")
     """
     trainer = ALSTrainer(
         model=model,
@@ -375,8 +375,11 @@ def train_als_model(
     
     training_summary = trainer.fit(X_train, show_progress=True)
     
-    logger.info(f"Training completed: {training_summary['training_time']:.2f}s, "
-                f"{training_summary['iterations']} iterations")
+    logger.info(
+        "Training completed: %.2fs, %s iterations",
+        training_summary['total_duration_seconds'],
+        training_summary['iterations_completed'],
+    )
     
     return trainer.model, training_summary
 
@@ -718,7 +721,7 @@ def run_als_pipeline(
             'use_gpu': use_gpu,
             'random_seed': random_seed,
             'normalize_embeddings': normalize_embeddings,
-            'training_time_seconds': training_summary.get('training_time', 0)
+            'training_time_seconds': training_summary.get('total_duration_seconds', 0)
         }
         
         # Prepare metrics (flatten EvaluationResult)

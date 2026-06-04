@@ -186,15 +186,23 @@ def detect_interaction_drift(
         "details": {},
     }
 
-    # Compare interaction rates - handle nested structure
-    current_rate = (
-        current.get("avg_interactions_per_user") or
-        current.get("trainable_users", {}).get("avg_interactions_per_trainable_user", 0)
-    )
-    baseline_rate = (
-        baseline.get("avg_interactions_per_user") or
-        baseline.get("trainable_users", {}).get("avg_interactions_per_trainable_user", 0)
-    )
+    def interaction_rate(stats: Dict[str, Any]) -> float:
+        direct_rate = stats.get("avg_interactions_per_user")
+        if direct_rate is not None:
+            return float(direct_rate)
+
+        trainable_stats = stats.get("trainable_users")
+        if isinstance(trainable_stats, dict):
+            nested_rate = trainable_stats.get("avg_interactions_per_trainable_user")
+            if nested_rate is not None:
+                return float(nested_rate)
+
+        num_users = float(stats.get("num_users") or 0)
+        num_interactions = float(stats.get("num_interactions") or 0)
+        return num_interactions / num_users if num_users > 0 else 0.0
+
+    current_rate = interaction_rate(current)
+    baseline_rate = interaction_rate(baseline)
 
     if baseline_rate == 0:
         result["status"] = "no_baseline"
@@ -348,7 +356,7 @@ def detect_drift(
             )
 
             if any_drift:
-                logger.warning("⚠ Drift detected! Check report for details.")
+                logger.warning("Drift detected. Check report for details.")
                 send_pipeline_alert(
                     "drift_detection",
                     "warning",
@@ -356,7 +364,7 @@ def detect_drift(
                     severity="warning",
                 )
             else:
-                logger.info("✓ No significant drift detected")
+                logger.info("No significant drift detected")
 
         except Exception as e:
             error_msg = str(e)
@@ -416,12 +424,12 @@ def main() -> None:
         print(f"{'=' * 60}")
 
         if result["status"] == "success":
-            drift_status = "⚠ YES" if result["drift_detected"] else "✓ NO"
+            drift_status = "YES" if result["drift_detected"] else "NO"
             print(f"  Drift Detected: {drift_status}")
             print(f"  Report: {result.get('report_file', 'N/A')}")
 
             for dr in result.get("drift_results", []):
-                status = "⚠" if dr.get("drift_detected") else "✓"
+                status = "DRIFT" if dr.get("drift_detected") else "OK"
                 print(f"  {status} {dr['metric']}")
 
         elif result.get("message"):

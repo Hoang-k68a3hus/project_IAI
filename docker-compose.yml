@@ -21,6 +21,7 @@ services:
       - ./artifacts:/app/artifacts  # Writable for model training
       - ./logs:/app/logs
       - ./config:/app/config  # Writable for scheduler config updates
+      - ./reports:/app/reports
     environment:
       - ENV=production
       - LOG_LEVEL=INFO
@@ -57,6 +58,7 @@ services:
       - ./artifacts:/app/artifacts:ro
       - ./logs:/app/logs:ro
       - ./config:/app/config:ro
+      - ./reports:/app/reports:ro
     environment:
       - ENV=production
     command: >
@@ -67,6 +69,12 @@ services:
     depends_on:
       api:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8501/_stcore/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
     restart: unless-stopped
     networks:
       - viecomrec-net
@@ -89,6 +97,7 @@ services:
       - ./logs:/app/logs
       - ./config:/app/config:ro
       - ./checkpoints:/app/checkpoints
+      - ./reports:/app/reports
     environment:
       - ENV=training
       - LOG_LEVEL=DEBUG
@@ -113,6 +122,7 @@ services:
       - ./artifacts:/app/artifacts
       - ./logs:/app/logs
       - ./config:/app/config:ro
+      - ./reports:/app/reports
     environment:
       - ENV=pipeline
       - LOG_LEVEL=INFO
@@ -135,6 +145,7 @@ services:
       - ./artifacts:/app/artifacts
       - ./logs:/app/logs
       - ./config:/app/config:ro
+      - ./reports:/app/reports
     environment:
       - ENV=production
       - LOG_LEVEL=INFO

@@ -14,8 +14,13 @@ pandas>=2.0.0
 scipy>=1.11.0
 torch>=2.2.0
 
+# Collaborative filtering training uses implicit, which is built in the Linux
+# Docker image via requirements.docker.txt. Do not install it in the Windows
+# local runtime; run `./docker.ps1 train` instead.
+
 # Scheduling and automation
 apscheduler>=3.10.0
+pytz>=2024.2
 
 # Logging and monitoring
 # (Add your logging libraries here)

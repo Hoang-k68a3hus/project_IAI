@@ -24,6 +24,8 @@ from pathlib import Path
 
 import numpy as np
 
+from .sampler import merge_user_exclusion_sets
+
 logger = logging.getLogger(__name__)
 
 
@@ -490,6 +492,7 @@ class AdvancedTripletSampler:
         user_pos_sets: Dict[int, Set[int]],
         num_items: int,
         hard_neg_sets: Optional[Dict[int, Set[int]]] = None,
+        user_exclusion_sets: Optional[Dict[int, Set[int]]] = None,
         item_embeddings: Optional[np.ndarray] = None,
         item_categories: Optional[Dict[int, str]] = None,
         item_sentiment_scores: Optional[Dict[int, float]] = None,
@@ -507,6 +510,9 @@ class AdvancedTripletSampler:
             user_pos_sets: Dict mapping u_idx -> Set of positive items
             num_items: Total number of items
             hard_neg_sets: Dict mapping u_idx -> Set of hard negative items
+            user_exclusion_sets: Optional full item sets to exclude per user
+                while sampling negatives. Include train + validation/test
+                positives here to avoid sampling holdout positives as negatives.
             item_embeddings: BERT embeddings for contextual sampling
             item_categories: Item categories for contextual sampling
             item_sentiment_scores: Item sentiment scores for contrast sampling
@@ -518,6 +524,10 @@ class AdvancedTripletSampler:
         """
         self.positive_pairs = positive_pairs
         self.user_pos_sets = user_pos_sets
+        self.user_exclusion_sets = merge_user_exclusion_sets(
+            user_pos_sets,
+            user_exclusion_sets
+        )
         self.num_items = num_items
         self.samples_per_positive = samples_per_positive
         self.rng = np.random.default_rng(random_seed)
@@ -574,6 +584,8 @@ class AdvancedTripletSampler:
         logger.info(f"  Positive pairs: {self.num_positives:,}")
         logger.info(f"  Samples per epoch: {self.samples_per_epoch:,}")
         logger.info(f"  Strategy: {self.strategy.to_dict()}")
+        if user_exclusion_sets is not None:
+            logger.info("  Negative exclusions: train positives + supplied holdout positives")
         logger.info(f"  Dynamic sampling: {self.dynamic_config.enable_dynamic}")
     
     def _get_current_difficulty(self) -> float:
@@ -757,7 +769,7 @@ class AdvancedTripletSampler:
         for i in range(self.samples_per_epoch):
             user_idx = int(users[i])
             pos_item = int(positives[i])
-            pos_set = self.user_pos_sets.get(user_idx, set())
+            pos_set = self.user_exclusion_sets.get(user_idx, set())
             
             negatives[i] = self.sample_negative(user_idx, pos_item, pos_set)
         
@@ -827,7 +839,7 @@ class AdvancedTripletSampler:
         for idx in np.where(easy_mask)[0]:
             user_idx = int(users[idx])
             pos_item = int(positives[idx])
-            pos_set = self.user_pos_sets.get(user_idx, set())
+            pos_set = self.user_exclusion_sets.get(user_idx, set())
             
             # Try harder sampling strategies
             for _ in range(3):  # Multiple attempts
@@ -900,6 +912,7 @@ def create_advanced_sampler(
     user_pos_sets: Dict[int, Set[int]],
     num_items: int,
     hard_neg_sets: Optional[Dict[int, Set[int]]] = None,
+    user_exclusion_sets: Optional[Dict[int, Set[int]]] = None,
     item_embeddings: Optional[np.ndarray] = None,
     item_sentiment_scores: Optional[Dict[int, float]] = None,
     item_popularity: Optional[Dict[int, float]] = None,
@@ -918,6 +931,7 @@ def create_advanced_sampler(
         user_pos_sets: Dict of positive sets per user
         num_items: Total items
         hard_neg_sets: Hard negative sets (rating ≤ 3)
+        user_exclusion_sets: Optional full item sets to exclude per user
         item_embeddings: BERT embeddings for contextual sampling
         item_sentiment_scores: Sentiment scores for contrast sampling
         item_popularity: Popularity scores for popular sampling
@@ -951,6 +965,7 @@ def create_advanced_sampler(
         user_pos_sets=user_pos_sets,
         num_items=num_items,
         hard_neg_sets=hard_neg_sets,
+        user_exclusion_sets=user_exclusion_sets,
         item_embeddings=item_embeddings,
         item_sentiment_scores=item_sentiment_scores,
         item_popularity=item_popularity,

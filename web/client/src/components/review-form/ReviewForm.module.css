@@ -1,0 +1,264 @@
+.container {
+  background: white;
+  border-radius: 16px;
+  padding: 1.5rem;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.15);
+  max-width: 500px;
+  animation: slideUp 0.3s ease-out;
+}
+
+@keyframes slideUp {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 1.5rem;
+  padding-bottom: 1rem;
+  border-bottom: 2px solid #f0e0e8;
+}
+
+.header h3 {
+  font-size: 1.3rem;
+  color: #333;
+  margin: 0;
+}
+
+.closeBtn {
+  background: transparent;
+  border: none;
+  font-size: 1.5rem;
+  color: #999;
+  cursor: pointer;
+  transition: color 0.2s;
+  padding: 0;
+  width: 30px;
+  height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.closeBtn:hover:not(:disabled) {
+  color: #db7093;
+}
+
+.closeBtn:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
+/* Rating Group */
+.ratingGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 0.8rem;
+}
+
+.ratingGroup label {
+  font-weight: 600;
+  color: #333;
+  font-size: 0.95rem;
+}
+
+.starContainer {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.star {
+  width: 50px;
+  height: 50px;
+  border: 2px solid #f0e0e8;
+  background: white;
+  border-radius: 12px;
+  font-size: 2rem;
+  cursor: pointer;
+  transition: all 0.2s;
+  color: #ddd;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.star:hover {
+  border-color: #ff6b9d;
+  color: #ff6b9d;
+  transform: scale(1.1);
+}
+
+.star.active {
+  background: linear-gradient(135deg, #ff6b9d, #db7093);
+  color: white;
+  border-color: transparent;
+}
+
+.ratingLabel {
+  color: #db7093;
+  font-weight: 500;
+  font-size: 0.9rem;
+}
+
+/* Comment Group */
+.commentGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.commentGroup label {
+  font-weight: 600;
+  color: #333;
+  font-size: 0.95rem;
+}
+
+.commentGroup textarea {
+  padding: 0.8rem;
+  border: 2px solid #f0e0e8;
+  border-radius: 10px;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  font-size: 0.95rem;
+  resize: vertical;
+  transition: border-color 0.3s;
+}
+
+.commentGroup textarea:focus {
+  outline: none;
+  border-color: #db7093;
+  box-shadow: 0 0 0 4px rgba(219, 112, 147, 0.1);
+}
+
+.commentGroup textarea:disabled {
+  background: #f8f8f8;
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.commentGroup small {
+  color: #999;
+  font-size: 0.85rem;
+}
+
+/* Error Message */
+.error {
+  background: #ffebee;
+  color: #c62828;
+  padding: 0.8rem;
+  border-radius: 8px;
+  font-size: 0.9rem;
+  border-left: 4px solid #c62828;
+}
+
+/* Button Group */
+.buttonGroup {
+  display: flex;
+  gap: 1rem;
+  margin-top: 0.5rem;
+}
+
+.cancelBtn,
+.submitBtn {
+  flex: 1;
+  padding: 0.8rem 1.5rem;
+  border: none;
+  border-radius: 10px;
+  font-size: 0.95rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.3s;
+}
+
+.cancelBtn {
+  background: #f0e0e8;
+  color: #666;
+}
+
+.cancelBtn:hover:not(:disabled) {
+  background: #e0d0d8;
+  color: #333;
+}
+
+.submitBtn {
+  background: linear-gradient(135deg, #ff6b9d, #db7093);
+  color: white;
+}
+
+.submitBtn:hover:not(:disabled) {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 20px rgba(219, 112, 147, 0.4);
+}
+
+.submitBtn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+/* Success Message */
+.successMessage {
+  text-align: center;
+  padding: 2rem 1.5rem;
+  animation: fadeIn 0.3s ease-out;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.successIcon {
+  font-size: 3rem;
+  margin-bottom: 1rem;
+}
+
+.successMessage p {
+  font-size: 1.1rem;
+  color: #2e7d32;
+  font-weight: 600;
+  margin-bottom: 0.5rem;
+}
+
+.successMessage small {
+  color: #666;
+  font-size: 0.9rem;
+}
+
+/* Responsive */
+@media (max-width: 600px) {
+  .container {
+    max-width: 100%;
+    padding: 1rem;
+  }
+
+  .star {
+    width: 40px;
+    height: 40px;
+    font-size: 1.5rem;
+  }
+
+  .commentGroup textarea {
+    font-size: 0.9rem;
+  }
+
+  .buttonGroup {
+    flex-direction: column;
+  }
+}

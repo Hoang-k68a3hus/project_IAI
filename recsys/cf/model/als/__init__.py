@@ -23,7 +23,7 @@ Usage:
     >>> # Step 1: Prepare matrices
     >>> preparer = ALSMatrixPreparer(base_path='data/processed')
     >>> data = preparer.prepare_complete_als_data()
-    >>> X_train = data['X_train_implicit']
+    >>> X_train = data['X_train_confidence']  # users x items
     >>> 
     >>> # Step 2: Initialize model
     >>> initializer = ALSModelInitializer(preset='default')

@@ -49,6 +49,39 @@ class ALSDataPreparer:
         self.normalize_confidence = normalize_confidence
         self.min_confidence = min_confidence
         self.max_confidence = max_confidence
+
+    def _aggregate_duplicate_pairs(
+        self,
+        interactions_df: pd.DataFrame,
+        user_col: str,
+        item_col: str,
+        confidence_col: str
+    ) -> Tuple[pd.DataFrame, int]:
+        """Collapse duplicate user-item rows before CSR construction."""
+        duplicate_mask = interactions_df.duplicated(
+            subset=[user_col, item_col],
+            keep=False
+        )
+        duplicate_rows = int(duplicate_mask.sum())
+
+        if duplicate_rows == 0:
+            return interactions_df, 0
+
+        duplicate_pairs = interactions_df.loc[
+            duplicate_mask, [user_col, item_col]
+        ].drop_duplicates().shape[0]
+        logger.warning(
+            "Found %s duplicate rows across %s user-item pairs; using max confidence per pair",
+            duplicate_rows,
+            duplicate_pairs,
+        )
+
+        aggregated = (
+            interactions_df
+            .groupby([user_col, item_col], as_index=False)[confidence_col]
+            .max()
+        )
+        return aggregated, duplicate_rows
     
     def prepare_confidence_matrix(
         self,
@@ -94,12 +127,43 @@ class ALSDataPreparer:
         if missing_cols:
             raise ValueError(f"Missing required columns: {missing_cols}")
         
+        df_matrix, duplicate_rows = self._aggregate_duplicate_pairs(
+            interactions_df,
+            user_col=user_col,
+            item_col=item_col,
+            confidence_col=confidence_col
+        )
+
+        if len(df_matrix) == 0:
+            logger.warning("No interactions available for ALS confidence matrix")
+            X_confidence = csr_matrix((num_users, num_items), dtype=np.float32)
+            stats = self._compute_matrix_stats(X_confidence, np.array([], dtype=np.float32))
+            stats.update({
+                'input_interactions': int(len(interactions_df)),
+                'aggregated_interactions': 0,
+                'duplicate_rows_aggregated': int(duplicate_rows),
+            })
+            return X_confidence, stats
+
         # Extract data
-        users = interactions_df[user_col].values
-        items = interactions_df[item_col].values
-        confidences = interactions_df[confidence_col].values
+        users = df_matrix[user_col].values
+        items = df_matrix[item_col].values
+        confidences = df_matrix[confidence_col].values
+
+        if users.min() < 0:
+            raise ValueError(f"User index {users.min()} is negative")
+        if items.min() < 0:
+            raise ValueError(f"Item index {items.min()} is negative")
+        if users.max() >= num_users:
+            raise ValueError(f"User index {users.max()} exceeds num_users {num_users}")
+        if items.max() >= num_items:
+            raise ValueError(f"Item index {items.max()} exceeds num_items {num_items}")
         
-        logger.info(f"Processing {len(interactions_df):,} interactions")
+        logger.info(
+            "Processing %s interactions (%s after duplicate aggregation)",
+            f"{len(interactions_df):,}",
+            f"{len(df_matrix):,}",
+        )
         logger.info(f"Matrix shape: ({num_users:,}, {num_items:,})")
         
         # Validate confidence range
@@ -130,6 +194,11 @@ class ALSDataPreparer:
         
         # Compute statistics
         stats = self._compute_matrix_stats(X_confidence, confidences)
+        stats.update({
+            'input_interactions': int(len(interactions_df)),
+            'aggregated_interactions': int(len(df_matrix)),
+            'duplicate_rows_aggregated': int(duplicate_rows),
+        })
         
         # Log summary
         logger.info("\n" + "-"*80)
@@ -163,19 +232,19 @@ class ALSDataPreparer:
             Dict with statistical metrics
         """
         total_cells = matrix.shape[0] * matrix.shape[1]
-        sparsity = 1.0 - (matrix.nnz / total_cells)
+        sparsity = 1.0 if total_cells == 0 else 1.0 - (matrix.nnz / total_cells)
         
         stats = {
             'sparsity': sparsity,
             'density': 1.0 - sparsity,
             'nnz': matrix.nnz,
-            'mean_confidence': float(values.mean()),
-            'median_confidence': float(np.median(values)),
-            'std_confidence': float(values.std()),
-            'min_confidence': float(values.min()),
-            'max_confidence': float(values.max()),
-            'q25_confidence': float(np.percentile(values, 25)),
-            'q75_confidence': float(np.percentile(values, 75))
+            'mean_confidence': float(values.mean()) if len(values) else 0.0,
+            'median_confidence': float(np.median(values)) if len(values) else 0.0,
+            'std_confidence': float(values.std()) if len(values) else 0.0,
+            'min_confidence': float(values.min()) if len(values) else 0.0,
+            'max_confidence': float(values.max()) if len(values) else 0.0,
+            'q25_confidence': float(np.percentile(values, 25)) if len(values) else 0.0,
+            'q75_confidence': float(np.percentile(values, 75)) if len(values) else 0.0
         }
         
         return stats
@@ -243,15 +312,24 @@ class ALSDataPreparer:
         """
         logger.info("Validating ALS confidence matrix...")
         
-        # Check 1: Non-zero count matches
-        if matrix.nnz != len(interactions_df):
+        expected_df, duplicate_rows = self._aggregate_duplicate_pairs(
+            interactions_df,
+            user_col=user_col,
+            item_col=item_col,
+            confidence_col='confidence_score'
+        )
+
+        # Check 1: Non-zero count matches unique user-item pairs
+        if matrix.nnz != len(expected_df):
             raise ValueError(
-                f"Matrix nnz ({matrix.nnz}) != interactions count ({len(interactions_df)})"
+                f"Matrix nnz ({matrix.nnz}) != unique interaction count ({len(expected_df)})"
             )
+        if duplicate_rows:
+            logger.info("Validated matrix after aggregating %s duplicate rows", duplicate_rows)
         
         # Check 2: Spot-check random samples
-        sample_size = min(100, len(interactions_df))
-        sample_rows = interactions_df.sample(n=sample_size, random_state=42)
+        sample_size = min(100, len(expected_df))
+        sample_rows = expected_df.sample(n=sample_size, random_state=42)
         
         mismatches = 0
         for _, row in sample_rows.iterrows():
@@ -276,7 +354,7 @@ class ALSDataPreparer:
             logger.info(f"✓ Spot-check passed ({sample_size} samples)")
         
         # Check 3: No negative values
-        if matrix.data.min() < 0:
+        if matrix.nnz > 0 and matrix.data.min() < 0:
             raise ValueError("Matrix contains negative confidence values")
         
         # Check 4: Shape matches
@@ -552,20 +630,20 @@ class ALSDataPreparer:
     def prepare_for_implicit_library(
         self,
         X_confidence: csr_matrix,
-        transpose: bool = True
+        transpose: bool = False
     ) -> csr_matrix:
         """
-        Prepare matrix for implicit library (expects item-user format).
+        Prepare matrix for implicit library (users x items for implicit>=0.7).
         
         Args:
             X_confidence: Confidence matrix (user-item format)
-            transpose: If True, transpose to item-user format
+            transpose: Legacy option. Keep False for implicit>=0.7.
         
         Returns:
             csr_matrix: Matrix in format expected by implicit library
         
         Note:
-            implicit library expects shape (num_items, num_users)
+            implicit>=0.7 expects shape (num_users, num_items)
         
         Example:
             >>> X_conf, _ = preparer.prepare_confidence_matrix(train_df, 26000, 2231)
@@ -573,12 +651,12 @@ class ALSDataPreparer:
             >>> print(X_train.shape)  # (2231, 26000) - transposed
         """
         if transpose:
-            logger.info("Transposing matrix for implicit library (item-user format)...")
+            logger.warning("transpose=True is legacy behavior; implicit>=0.7 expects users x items")
             X_train = X_confidence.T.tocsr()
-            logger.info(f"Transposed shape: {X_train.shape} (items × users)")
+            logger.info(f"Legacy transposed shape: {X_train.shape}")
             return X_train
         else:
-            return X_confidence
+            return X_confidence.tocsr()
     
     def get_als_training_summary(
         self,

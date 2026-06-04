@@ -26,6 +26,7 @@ import pickle
 from dataclasses import dataclass, field
 
 from .registry import ModelRegistry, DEFAULT_REGISTRY_PATH
+from recsys.cf.contracts import load_model_artifacts
 
 logger = logging.getLogger(__name__)
 
@@ -137,41 +138,10 @@ class ModelLoader:
             FileNotFoundError: If required files are missing
         """
         path = Path(model_path)
-        
         if not path.exists():
             raise FileNotFoundError(f"Model path does not exist: {model_path}")
-        
-        prefix = model_type
-        
-        # Load embeddings
-        u_file = path / f"{prefix}_U.npy"
-        v_file = path / f"{prefix}_V.npy"
-        
-        if not u_file.exists():
-            raise FileNotFoundError(f"Missing file: {u_file}")
-        if not v_file.exists():
-            raise FileNotFoundError(f"Missing file: {v_file}")
-        
-        U = np.load(u_file)
-        V = np.load(v_file)
-        
-        # Load params
-        params_file = path / f"{prefix}_params.json"
-        if not params_file.exists():
-            raise FileNotFoundError(f"Missing file: {params_file}")
-        
-        with open(params_file, 'r', encoding='utf-8') as f:
-            params = json.load(f)
-        
-        # Load metadata
-        metadata_file = path / f"{prefix}_metadata.json"
-        if not metadata_file.exists():
-            raise FileNotFoundError(f"Missing file: {metadata_file}")
-        
-        with open(metadata_file, 'r', encoding='utf-8') as f:
-            metadata = json.load(f)
-        
-        return U, V, params, metadata
+
+        return load_model_artifacts(path, model_type)
     
     def load_model(self, model_id: str) -> Tuple[np.ndarray, np.ndarray, Dict]:
         """

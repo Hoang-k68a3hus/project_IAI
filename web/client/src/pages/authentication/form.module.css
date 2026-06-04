@@ -1,0 +1,263 @@
+.wrapper {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    gap: 1.5em;
+}
+
+.form {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 1.2em;
+    width: 100%;
+}
+
+.form input {
+    width: 100%;
+    padding: 0.95em 1.2em;
+    border: 2px solid #f0e0e8;
+    border-radius: 12px;
+    font-size: 1rem;
+    background: #fefcfd;
+    transition: all 0.3s ease;
+    outline: none;
+    color: #333;
+}
+
+.form input::placeholder {
+    color: #bbb;
+}
+
+.form input:focus {
+    border-color: #db7093;
+    background: #fff;
+    box-shadow: 0 0 0 4px rgba(219, 112, 147, 0.1);
+}
+
+.form input:hover:not(:focus) {
+    border-color: #e8b4c8;
+}
+
+.header {
+    width: 100%;
+    text-align: center;
+    margin-bottom: 0.5em;
+}
+
+.title {
+    font-size: 1.8rem;
+    font-weight: 700;
+    background: linear-gradient(135deg, #db7093 0%, #ff69b4 50%, #c71585 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    letter-spacing: -0.5px;
+    margin-bottom: 0.3em;
+}
+
+.subtitle {
+    font-size: 0.95rem;
+    color: #888;
+    margin-top: 0.3em;
+}
+
+.login {
+    font-size: 0.95rem;
+    color: #777;
+    margin-top: 0.5em;
+    text-align: center;
+}
+
+.login a {
+    font-size: inherit;
+    color: #db7093;
+    font-weight: 600;
+    text-decoration: none;
+    margin-left: 0.3em;
+    transition: all 0.3s ease;
+    position: relative;
+}
+
+.login a::after {
+    content: '';
+    position: absolute;
+    bottom: -2px;
+    left: 0;
+    width: 0;
+    height: 2px;
+    background: linear-gradient(90deg, #ff6b9d, #c71585);
+    transition: width 0.3s ease;
+}
+
+.login a:hover {
+    color: #c71585;
+}
+
+.login a:hover::after {
+    width: 100%;
+}
+
+/* Submit Button Styles */
+.form button[type="submit"],
+.submitBtn {
+    width: 100%;
+    padding: 1em;
+    margin-top: 0.5em;
+    background: linear-gradient(135deg, #ff6b9d 0%, #db7093 50%, #c71585 100%);
+    background-size: 200% 200%;
+    color: white;
+    border: none;
+    border-radius: 12px;
+    font-size: 1rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.4s ease;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    position: relative;
+    overflow: hidden;
+}
+
+.form button[type="submit"]::before,
+.submitBtn::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: -100%;
+    width: 100%;
+    height: 100%;
+    background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.3), transparent);
+    transition: left 0.5s ease;
+}
+
+.form button[type="submit"]:hover,
+.submitBtn:hover {
+    background-position: 100% 0;
+    transform: translateY(-2px);
+    box-shadow: 0 10px 25px -5px rgba(219, 112, 147, 0.5);
+}
+
+.form button[type="submit"]:hover::before,
+.submitBtn:hover::before {
+    left: 100%;
+}
+
+.form button[type="submit"]:active,
+.submitBtn:active {
+    transform: translateY(0);
+}
+
+.form button[type="submit"]:disabled,
+.submitBtn:disabled {
+    background: linear-gradient(135deg, #d0d0d0 0%, #b0b0b0 100%);
+    cursor: not-allowed;
+    transform: none;
+    box-shadow: none;
+}
+
+/* Error Message */
+.errorMessage {
+    width: 100%;
+    padding: 0.8em 1em;
+    background: linear-gradient(135deg, #fff5f5, #ffe8e8);
+    border: 1px solid #ffcccc;
+    border-left: 4px solid #e74c3c;
+    border-radius: 8px;
+    color: #c0392b;
+    font-size: 0.9rem;
+    text-align: center;
+}
+
+/* Success Message */
+.successMessage {
+    width: 100%;
+    padding: 0.8em 1em;
+    background: linear-gradient(135deg, #f0fff4, #e8f8ec);
+    border: 1px solid #a8e6cf;
+    border-left: 4px solid #27ae60;
+    border-radius: 8px;
+    color: #1e8449;
+    font-size: 0.9rem;
+    text-align: center;
+}
+
+/* Logo */
+.logo {
+    width: 80px;
+    height: 80px;
+    margin-bottom: 0.5em;
+    object-fit: contain;
+}
+
+/* Social Login Buttons */
+.socialLogin {
+    display: flex;
+    flex-direction: column;
+    gap: 0.8em;
+    width: 100%;
+    margin-top: 0.5em;
+}
+
+.socialBtn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.8em;
+    padding: 0.9em;
+    border: 2px solid #eee;
+    border-radius: 12px;
+    background: white;
+    font-size: 0.95rem;
+    font-weight: 500;
+    color: #555;
+    cursor: pointer;
+    transition: all 0.3s ease;
+}
+
+.socialBtn:hover {
+    border-color: #db7093;
+    background: #fff5f8;
+    transform: translateY(-2px);
+    box-shadow: 0 5px 15px rgba(219, 112, 147, 0.15);
+}
+
+.divider {
+    display: flex;
+    align-items: center;
+    width: 100%;
+    margin: 1em 0;
+    gap: 1em;
+}
+
+.divider::before,
+.divider::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: linear-gradient(90deg, transparent, #e8c8d8, transparent);
+}
+
+.divider span {
+    font-size: 0.85rem;
+    color: #aaa;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+}
+
+@media (max-width: 480px) {
+    .title {
+        font-size: 1.5rem;
+    }
+    
+    .form input {
+        padding: 0.85em 1em;
+        font-size: 0.95rem;
+    }
+    
+    .form button[type="submit"],
+    .submitBtn {
+        padding: 0.9em;
+        font-size: 0.95rem;
+    }
+}

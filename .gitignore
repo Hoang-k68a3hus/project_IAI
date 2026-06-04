@@ -9,6 +9,18 @@ __pycache__/
 venv/
 env/
 ENV/
+.venv/
+
+# Node.js
+node_modules/
+package-lock.json
+*.log
+web/client/build/
+
+# Local environment
+.env
+.env.*
+!.env.example
 
 # IDEs
 .vscode/
@@ -24,10 +36,23 @@ ENV/
 .github/
 
 # Processed data (large files)
+checkpoints/
+logs/
+reports/
+*.pdf
+*.db
+*.sqlite
+*.sqlite3
+*.csv
+*.gsheet
 data/processed/*.parquet
 data/processed/*.npz
 data/processed/*.pkl
 data/processed/*.npy
+data/content_based_embeddings/
+data/published_data/
+data/processed_test/
+data/staging/
 
 # Keep structure files
 !data/processed/.gitkeep
@@ -39,9 +64,42 @@ logs/*.log
 logs/*.txt
 
 # Model artifacts
+*.npy
+*.npz
+*.pkl
+*.pickle
+*.joblib
+*.pt
+*.pth
+*.ckpt
+*.onnx
+*.h5
+*.safetensors
 model/checkpoints/
 model/saved_models/
 artifacts/
+
+# Media assets
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.webp
+*.bmp
+*.tiff
+*.ico
+*.svg
+*.mp3
+*.wav
+*.ogg
+*.flac
+*.aac
+*.m4a
+*.mp4
+*.mov
+*.avi
+*.mkv
+*.webm
 
 # Jupyter
 .ipynb_checkpoints/
@@ -50,6 +108,7 @@ artifacts/
 # OS
 .DS_Store
 Thumbs.db
+desktop.ini
 
 # Testing
 .pytest_cache/

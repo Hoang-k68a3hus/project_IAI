@@ -26,6 +26,8 @@ from scripts.utils import (  # type: ignore
     send_pipeline_alert,
 )
 
+from recsys.cf.contracts import get_current_best_model_id, normalize_registry
+
 
 # =============================================================================
 # Configuration
@@ -52,6 +54,24 @@ HEALTH_CONFIG = {
 # =============================================================================
 # Health Check Functions
 # =============================================================================
+
+def resolve_project_path(path_value: Any) -> Path:
+    """Resolve registry paths that may have been written inside Docker."""
+    raw = str(path_value or "")
+    path = Path(raw)
+
+    if path.exists():
+        return path
+
+    normalized = raw.replace("\\", "/")
+    if normalized.startswith("/app/"):
+        return PROJECT_ROOT / normalized[len("/app/"):]
+
+    if not path.is_absolute():
+        return PROJECT_ROOT / path
+
+    return path
+
 
 def check_service_health(logger: logging.Logger) -> Dict[str, Any]:
     """
@@ -328,7 +348,7 @@ def check_model_health(logger: logging.Logger) -> Dict[str, Any]:
     # Load registry
     try:
         with open(registry_path, "r") as f:
-            registry = json.load(f)
+            registry = normalize_registry(json.load(f))
     except Exception as e:
         result["status"] = "critical"
         result["checks"].append(
@@ -349,8 +369,8 @@ def check_model_health(logger: logging.Logger) -> Dict[str, Any]:
     )
 
     # Check current_best
-    current_best_data = registry.get("current_best")
-    if not current_best_data:
+    current_best = get_current_best_model_id(registry)
+    if not current_best:
         result["status"] = "critical"
         result["checks"].append(
             {
@@ -361,25 +381,7 @@ def check_model_health(logger: logging.Logger) -> Dict[str, Any]:
         )
         return result
 
-    # Handle both dict (new format) and string (old format)
-    if isinstance(current_best_data, dict):
-        current_best = current_best_data.get("model_id")
-    else:
-        current_best = current_best_data
-
-    # Find best model info (models can be dict or list)
-    models_data = registry.get("models", {})
-    if isinstance(models_data, dict):
-        best_model = models_data.get(current_best)
-        if best_model:
-            best_model["model_id"] = current_best  # Ensure model_id is set
-    else:
-        # Old list format
-        best_model = None
-        for model in models_data:
-            if model.get("model_id") == current_best:
-                best_model = model
-                break
+    best_model = registry.get("models", {}).get(current_best)
 
     if not best_model:
         result["status"] = "critical"
@@ -403,7 +405,7 @@ def check_model_health(logger: logging.Logger) -> Dict[str, Any]:
     result["current_model"] = best_model
 
     # Check model files exist
-    model_path = Path(best_model.get("path", ""))
+    model_path = resolve_project_path(best_model.get("path", ""))
     if model_path.exists():
         result["checks"].append(
             {
@@ -486,9 +488,8 @@ def check_pipeline_health(logger: logging.Logger) -> Dict[str, Any]:
 
     try:
         tracker = PipelineTracker()
+        stale_count = tracker.cleanup_stale_runs(max_running_hours=24)
         stats = tracker.get_stats(days=7)
-
-        result["stats"] = stats
 
         # Check for failed pipelines
         for pipeline_name, pipeline_stats in stats.get(
@@ -523,7 +524,6 @@ def check_pipeline_health(logger: logging.Logger) -> Dict[str, Any]:
                     )
 
         # Check for stale runs
-        stale_count = tracker.cleanup_stale_runs(max_running_hours=24)
         if stale_count > 0:
             result["status"] = "warning"
             result["checks"].append(
@@ -533,6 +533,11 @@ def check_pipeline_health(logger: logging.Logger) -> Dict[str, Any]:
                     "message": f"Cleaned up {stale_count} stale pipeline runs",
                 }
             )
+
+        if stale_count > 0:
+            stats = tracker.get_stats(days=7)
+
+        result["stats"] = stats
 
     except Exception as e:
         result["checks"].append(
@@ -605,7 +610,7 @@ def run_health_check(
 
                 # Log results
                 for check in check_result.get("checks", []):
-                    status = "✓" if check.get("passed") else "✗"
+                    status = "OK" if check.get("passed") else "FAIL"
                     logger.info("  %s %s: %s", status, check["name"], check["message"])
 
             except Exception as e:
@@ -697,18 +702,18 @@ def main() -> None:
 
         for component, data in result["components"].items():
             status_icon = {
-                "healthy": "✓",
-                "warning": "⚠",
-                "degraded": "⚡",
-                "critical": "✗",
-                "offline": "○",
-                "error": "✗",
+                "healthy": "OK",
+                "warning": "WARN",
+                "degraded": "DEGRADED",
+                "critical": "CRITICAL",
+                "offline": "OFFLINE",
+                "error": "ERROR",
             }.get(data.get("status"), "?")
 
             print(f"\n{status_icon} {component.upper()}: {data.get('status', 'unknown')}")
 
             for check in data.get("checks", []):
-                icon = "  ✓" if check.get("passed") else "  ✗"
+                icon = "  OK" if check.get("passed") else "  FAIL"
                 print(f"{icon} {check['name']}: {check['message']}")
 
     # Exit code based on status

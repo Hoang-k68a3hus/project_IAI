@@ -22,6 +22,12 @@ import threading
 import pickle
 import warnings
 
+from recsys.cf.contracts import (
+    get_current_best_model_id,
+    load_model_artifacts,
+    normalize_registry,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -132,12 +138,26 @@ class CFModelLoader:
                 return None
         
         with open(self.registry_path, 'r', encoding='utf-8') as f:
-            registry = json.load(f)
+            registry = normalize_registry(json.load(f))
         
         self._registry_cache = registry
         self._last_registry_check = datetime.now()
         
         return registry
+
+    def _get_expected_factor_shapes(self) -> Tuple[Optional[int], Optional[int]]:
+        """Return expected (num_trainable_users, num_items) from mappings if available."""
+        mappings_path = self.data_dir / 'user_item_mappings.json'
+        if not mappings_path.exists():
+            return None, None
+
+        with open(mappings_path, 'r', encoding='utf-8') as f:
+            mappings = json.load(f)
+
+        metadata = mappings.get('metadata', {})
+        expected_users = metadata.get('num_trainable_users') or metadata.get('num_users')
+        expected_items = metadata.get('num_items')
+        return expected_users, expected_items
     
     def load_model(self, model_id: Optional[str] = None, raise_if_missing: bool = True) -> Optional[Dict[str, Any]]:
         """
@@ -178,14 +198,9 @@ class CFModelLoader:
         
         # Determine model to load
         if model_id is None:
-            current_best = registry.get('current_best')
-            if not current_best:
+            model_id = get_current_best_model_id(registry)
+            if not model_id:
                 raise ValueError("No current_best model in registry")
-            # Handle both formats: string or dict with model_id
-            if isinstance(current_best, str):
-                model_id = current_best
-            else:
-                model_id = current_best['model_id']
         
         # Get model info
         model_info = registry['models'].get(model_id)
@@ -195,58 +210,13 @@ class CFModelLoader:
         model_path = Path(model_info['path'])
         model_type = model_info['model_type']
         
-        # Load embeddings
-        U_raw = np.load(model_path / f"{model_type}_U.npy")
-        V_raw = np.load(model_path / f"{model_type}_V.npy")
-        
-        # Load metadata to check dimensions
-        metadata_path = model_path / f"{model_type}_metadata.json"
-        if metadata_path.exists():
-            with open(metadata_path, 'r', encoding='utf-8') as f:
-                meta = json.load(f)
-            num_users_meta = meta.get('num_users', 0)
-            num_items_meta = meta.get('num_items', 0)
-        else:
-            num_users_meta = 0
-            num_items_meta = 0
-        
-        # FIX: Check if U/V are swapped (issue from Colab training)
-        # Load mappings to check actual dimensions
-        mappings_path = self.data_dir / 'user_item_mappings.json'
-        if mappings_path.exists():
-            with open(mappings_path, 'r', encoding='utf-8') as f:
-                mappings_check = json.load(f)
-            actual_num_items = mappings_check['metadata'].get('num_items', 0)
-            actual_num_trainable = mappings_check['metadata'].get('num_trainable_users', 0)
-            
-            # Convention: U = (num_trainable_users, factors), V = (num_items, factors)
-            # If U.shape[0] matches num_items, matrices are swapped
-            if U_raw.shape[0] == actual_num_items and V_raw.shape[0] == actual_num_trainable:
-                logger.warning(
-                    f"U/V matrices appear swapped in model files. "
-                    f"Raw U: {U_raw.shape}, Raw V: {V_raw.shape}. "
-                    f"Expected: U=({actual_num_trainable}, factors), V=({actual_num_items}, factors). "
-                    f"Swapping to fix."
-                )
-                U = V_raw  # V_raw contains user embeddings
-                V = U_raw  # U_raw contains item embeddings
-            else:
-                U = U_raw
-                V = V_raw
-        else:
-            # No mappings file, use raw
-            U = U_raw
-            V = V_raw
-        
-        # Load params
-        with open(model_path / f"{model_type}_params.json", 'r', encoding='utf-8') as f:
-            params = json.load(f)
-        
-        # Load full metadata (already loaded partially above for dimension check)
-        if metadata_path.exists():
-            metadata = meta
-        else:
-            metadata = {}
+        expected_users, expected_items = self._get_expected_factor_shapes()
+        U, V, params, metadata = load_model_artifacts(
+            model_path,
+            model_type,
+            expected_num_users=expected_users,
+            expected_num_items=expected_items,
+        )
         
         # Extract score_range for normalization
         score_range = metadata.get('score_range', {})
@@ -569,15 +539,9 @@ class CFModelLoader:
         except FileNotFoundError:
             return False
         
-        new_best = registry.get('current_best')
-        if not new_best:
+        new_best_id = get_current_best_model_id(registry)
+        if not new_best_id:
             return False
-        
-        # Handle both formats: string or dict with model_id
-        if isinstance(new_best, str):
-            new_best_id = new_best
-        else:
-            new_best_id = new_best['model_id']
         
         if new_best_id != self.current_model_id:
             logger.info(f"Registry updated: {self.current_model_id} -> {new_best_id}")
@@ -600,8 +564,7 @@ class CFModelLoader:
                 'empty_mode': True,
             }
         
-        # Use mappings metadata for accurate user/item counts
-        # (matrix shapes can be swapped, so rely on metadata)
+        # Use mappings metadata for accurate user/item counts.
         metadata = self.mappings.get('metadata', {}) if self.mappings else {}
         
         return {

@@ -831,7 +831,7 @@ class AdvancedBPRTrainer:
                 
                 # Compute Recall@k
                 hits = len(set(top_k_items) & test_items)
-                recall = hits / min(k, len(test_items))
+                recall = hits / len(test_items)
                 recalls.append(recall)
                 
                 # Compute NDCG@k

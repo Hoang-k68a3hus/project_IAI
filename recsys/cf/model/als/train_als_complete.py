@@ -39,7 +39,7 @@ import json
 import yaml
 
 # Add project root to path
-project_root = Path(__file__).parent.parent
+project_root = Path(__file__).resolve().parents[4]
 sys.path.insert(0, str(project_root))
 
 # Import ALS modules
@@ -558,13 +558,15 @@ class ALSTrainingPipeline:
     
     def _initialize_model(self):
         """Step 2: Initialize ALS model."""
-        initializer = ALSModelInitializer(
-            factors=self.config.get('factors', 64),
-            regularization=self.config.get('regularization', 0.01),
-            iterations=self.config.get('iterations', 15),
-            alpha=self.config.get('alpha', 10),
-            random_seed=self.config.get('random_seed', 42)
-        )
+        model_config = {
+            'factors': self.config.get('factors', 64),
+            'regularization': self.config.get('regularization', 0.01),
+            'iterations': self.config.get('iterations', 15),
+            'alpha': self.config.get('alpha', 10),
+            'random_state': self.config.get('random_seed', 42),
+            'use_gpu': self.config.get('use_gpu', False),
+        }
+        initializer = ALSModelInitializer(config=model_config)
         
         model = initializer.initialize_model()
         
@@ -591,8 +593,8 @@ class ALSTrainingPipeline:
         )
         
         logger.info(f"Training completed:")
-        logger.info(f"  Training time: {training_summary['training_time']:.2f}s")
-        logger.info(f"  Iterations: {training_summary['iterations']}")
+        logger.info(f"  Training time: {training_summary['total_duration_seconds']:.2f}s")
+        logger.info(f"  Iterations: {training_summary['iterations_completed']}")
         
         if 'peak_memory_mb' in training_summary:
             logger.info(f"  Peak memory: {training_summary['peak_memory_mb']:.2f} MB")
@@ -655,7 +657,7 @@ class ALSTrainingPipeline:
             'alpha': self.config.get('alpha', 10),
             'random_seed': self.config.get('random_seed', 42),
             'normalize_embeddings': self.config.get('normalize_embeddings', False),
-            'training_time_seconds': training_summary.get('training_time', 0)
+            'training_time_seconds': training_summary.get('total_duration_seconds', 0)
         }
         
         # Prepare metrics (flatten EvaluationResult)

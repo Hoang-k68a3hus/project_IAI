@@ -42,6 +42,14 @@ from scripts.utils import (  # type: ignore
     get_git_commit,
 )
 
+from recsys.cf.contracts import (
+    MODEL_STATUS_ACTIVE,
+    atomic_write_json,
+    get_current_best_model_id,
+    normalize_registry,
+    validate_factor_matrices,
+)
+
 
 # =============================================================================
 # Configuration
@@ -107,6 +115,48 @@ TRAINING_CONFIG = {
 }
 
 
+def _require_implicit_runtime(logger: logging.Logger) -> None:
+    """Fail fast when someone tries to run implicit training on Windows."""
+    if sys.platform.startswith("win"):
+        message = (
+            "implicit training is supported through the Linux Docker image in this project. "
+            "Run `./docker.ps1 train` from Windows PowerShell, or run "
+            "`docker compose --profile training up trainer`."
+        )
+        logger.error(message)
+        raise RuntimeError(message)
+
+
+def _import_implicit_als(logger: logging.Logger):
+    _require_implicit_runtime(logger)
+    try:
+        from implicit.als import AlternatingLeastSquares
+    except ImportError as exc:
+        message = (
+            "Missing `implicit` in the current runtime. Build/use the Docker image "
+            "with requirements.docker.txt, then run `./docker.ps1 train`."
+        )
+        logger.error(message)
+        raise RuntimeError(message) from exc
+
+    return AlternatingLeastSquares
+
+
+def _import_implicit_bpr(logger: logging.Logger):
+    _require_implicit_runtime(logger)
+    try:
+        from implicit.bpr import BayesianPersonalizedRanking
+    except ImportError as exc:
+        message = (
+            "Missing `implicit` in the current runtime. Build/use the Docker image "
+            "with requirements.docker.txt, then run `./docker.ps1 train`."
+        )
+        logger.error(message)
+        raise RuntimeError(message) from exc
+
+    return BayesianPersonalizedRanking
+
+
 # =============================================================================
 # Training Functions
 # =============================================================================
@@ -151,7 +201,7 @@ def load_training_data(logger: logging.Logger) -> Dict[str, Any]:
         "user_pos_train": user_pos_train,
         "user_hard_neg_train": user_hard_neg_train,
         "data_stats": data_stats,
-        "data_hash": mappings.get("data_hash"),
+        "data_hash": mappings.get("data_hash") or mappings.get("metadata", {}).get("data_hash"),
     }
 
 
@@ -339,7 +389,7 @@ def compute_popularity_baseline(
             
             # Recall@K
             hits = len(preds_k & test_items)
-            recall = hits / min(len(test_items), k) if test_items else 0.0
+            recall = hits / len(test_items) if test_items else 0.0
             metrics[f"recall@{k}"].append(recall)
             
             # NDCG@K
@@ -450,18 +500,18 @@ def load_previous_model(
         return None
     
     with open(registry_path, "r") as f:
-        registry = json.load(f)
+        registry = normalize_registry(json.load(f))
     
     # Find latest model of this type
     models_of_type = [
-        m for m in registry.get("models", [])
+        m for m in registry.get("models", {}).values()
         if m.get("model_type") == model_type
     ]
     
     if not models_of_type:
         return None
     
-    latest = max(models_of_type, key=lambda m: m.get("registered_at", ""))
+    latest = max(models_of_type, key=lambda m: m.get("created_at") or m.get("registered_at", ""))
     model_path = Path(latest["path"])
     
     if not model_path.exists():
@@ -496,7 +546,7 @@ def train_als_model(
     Returns:
         Dict with model, embeddings, and training info
     """
-    from implicit.als import AlternatingLeastSquares
+    AlternatingLeastSquares = _import_implicit_als(logger)
 
     config = TRAINING_CONFIG["als"]
     incremental_cfg = TRAINING_CONFIG["incremental"]
@@ -526,10 +576,8 @@ def train_als_model(
         random_state=42,
     )
 
-    # Train on confidence matrix (item x user format for implicit)
-    # IMPORTANT: Implicit 0.7+ expects (users, items) matrix, NOT (items, users)
-    # Old code transposed, but new implicit library expects user-item directly
-    X_train = data["X_confidence"]  # Keep as (users, items) - no transpose needed
+    # implicit>=0.7 expects user_items: rows are users, columns are items.
+    X_train = data["X_confidence"].tocsr()
     num_users, num_items = X_train.shape
 
     # === WARM-START: Load previous model embeddings ===
@@ -604,6 +652,12 @@ def train_als_model(
     # Extract embeddings
     U = model.user_factors  # (num_users, factors)
     V = model.item_factors  # (num_items, factors)
+    validate_factor_matrices(
+        U,
+        V,
+        expected_num_users=num_users,
+        expected_num_items=num_items,
+    )
 
     return {
         "model": model,
@@ -635,7 +689,7 @@ def train_bpr_model(
     Returns:
         Dict with model, embeddings, and training info
     """
-    from implicit.bpr import BayesianPersonalizedRanking
+    BayesianPersonalizedRanking = _import_implicit_bpr(logger)
 
     config = TRAINING_CONFIG["bpr"]
     early_stop_cfg = TRAINING_CONFIG["early_stopping"]
@@ -666,8 +720,8 @@ def train_bpr_model(
         )
     
     # === Create modified training matrix if using validation ===
-    # IMPORTANT: Implicit 0.7+ expects (users, items) matrix, NOT (items, users)
-    X_train = data["X_binary"]  # Keep as (users, items) - no transpose needed
+    # implicit>=0.7 expects user_items: rows are users, columns are items.
+    X_train = data["X_binary"].tocsr()
     num_users, num_items = X_train.shape
 
     # Initialize model
@@ -742,7 +796,7 @@ def train_bpr_model(
                     
                     top_10 = set(np.argsort(scores)[-10:])
                     hits = len(top_10 & val_items)
-                    val_recall += hits / min(len(val_items), 10)
+                    val_recall += hits / len(val_items)
                     n_val_users += 1
                 
                 val_recall /= max(n_val_users, 1)
@@ -797,6 +851,12 @@ def train_bpr_model(
     # Extract embeddings
     U = model.user_factors
     V = model.item_factors
+    validate_factor_matrices(
+        U,
+        V,
+        expected_num_users=num_users,
+        expected_num_items=num_items,
+    )
 
     return {
         "model": model,
@@ -884,7 +944,7 @@ def evaluate_model(
 
             # Recall@K
             hits = len(preds_k & test_items)
-            recall = hits / min(len(test_items), k) if test_items else 0.0
+            recall = hits / len(test_items) if test_items else 0.0
             metrics[f"recall@{k}"].append(recall)
 
             # NDCG@K
@@ -940,6 +1000,7 @@ def save_model(
     logger.info("Saving %s model to %s", model_type.upper(), output_dir)
 
     # Save embeddings
+    validate_factor_matrices(model_result["U"], model_result["V"])
     np.save(output_dir / f"{model_type}_U.npy", model_result["U"])
     np.save(output_dir / f"{model_type}_V.npy", model_result["V"])
 
@@ -967,6 +1028,14 @@ def save_model(
         "created_at": datetime.now().isoformat(),
         "data_hash": data["data_hash"],
         "git_commit": get_git_commit(),
+        "num_users": model_result["U"].shape[0],
+        "num_items": model_result["V"].shape[0],
+        "factors": model_result["U"].shape[1],
+        "artifact_layout": {
+            "user_factors": f"{model_type}_U.npy",
+            "item_factors": f"{model_type}_V.npy",
+            "convention": "U=(users,factors), V=(items,factors)",
+        },
         "score_range": {
             "min": 0.0,
             "max": float(model_result["U"].shape[1]),  # Approximate max score
@@ -1007,17 +1076,20 @@ def register_model(
     # Load or create registry
     if registry_path.exists():
         with open(registry_path, "r") as f:
-            registry = json.load(f)
+            registry = normalize_registry(json.load(f))
     else:
-        registry = {"models": [], "current_best": None}
+        registry = normalize_registry(None)
 
     # Create model entry
     entry = {
         "model_id": model_id,
         "model_type": model_type,
+        "version": model_id[len(f"{model_type}_"):] if model_id.startswith(f"{model_type}_") else model_id,
+        "created_at": datetime.now().isoformat(),
         "registered_at": datetime.now().isoformat(),
         "metrics": metrics,
         "path": str(output_dir),
+        "status": MODEL_STATUS_ACTIVE,
         "is_active": False,
     }
 
@@ -1028,16 +1100,12 @@ def register_model(
     )
     current_score = metrics.get(primary_metric, 0.0)
 
-    # Handle both dict and list formats for models
     models_dict = registry.get("models", {})
-    if isinstance(models_dict, list):
-        # Convert list to dict (old format)
-        models_dict = {m.get("model_id", f"model_{i}"): m for i, m in enumerate(models_dict)}
-        registry["models"] = models_dict
 
-    if registry.get("current_best"):
+    current_best_id = get_current_best_model_id(registry)
+    if current_best_id:
         # Find current best's score
-        best_model = models_dict.get(registry["current_best"])
+        best_model = models_dict.get(current_best_id)
         if best_model:
             best_metrics = best_model.get("metrics", {})
             best_score = best_metrics.get(primary_metric, 0.0)
@@ -1060,14 +1128,24 @@ def register_model(
             models_dict[model_key]["is_active"] = False
 
         entry["is_active"] = True
-        registry["current_best"] = model_id
+        registry["current_best"] = {
+            "model_id": model_id,
+            "model_type": model_type,
+            "version": entry["version"],
+            "path": str(output_dir),
+            "selection_metric": primary_metric,
+            "selection_value": current_score,
+            "selected_at": datetime.now().isoformat(),
+            "selected_by": "automation.model_training",
+        }
 
     # Add new model entry
     models_dict[model_id] = entry
+    registry["models"] = models_dict
+    registry = normalize_registry(registry)
 
     # Save registry
-    with open(registry_path, "w") as f:
-        json.dump(registry, f, indent=2)
+    atomic_write_json(registry_path, registry)
 
     logger.info("Registered model: %s (is_best=%s)", model_id, is_best)
 

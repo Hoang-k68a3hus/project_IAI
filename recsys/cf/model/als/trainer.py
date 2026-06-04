@@ -2,19 +2,23 @@
 ALS Model Training Module (Task 02 - Step 3)
 
 This module handles the complete training process for ALS models including:
-- Model fitting with progress tracking
-- Checkpoint management for intermediate saves
-- Training metrics monitoring (loss, time, memory)
-- Early stopping based on validation metrics
+- Model fitting with fit-level progress tracking
+- Final checkpoint management
+- Training metrics monitoring (time, memory)
+- Optional post-fit validation metrics
 - Integration with model initialization and data preparation
 
 Key Features:
-- Real-time progress logging with iteration metrics
-- Optional checkpointing every N iterations
+- Fit-level progress logging
+- Optional final checkpointing
 - Memory usage monitoring
 - Wall-clock time tracking
-- Support for validation-based early stopping
 - Robust error handling and recovery
+
+Note:
+    implicit.als.AlternatingLeastSquares.fit() does not expose per-iteration
+    callbacks. Per-iteration checkpoints, validation callbacks, and early
+    stopping require a custom ALS loop.
 
 Author: Copilot AI Assistant
 Date: November 23, 2025
@@ -22,6 +26,7 @@ Date: November 23, 2025
 
 import logging
 import time
+import traceback
 import tracemalloc
 from typing import Dict, Any, Optional, Tuple, Callable
 from pathlib import Path
@@ -37,8 +42,8 @@ except ImportError:
     IMPLICIT_AVAILABLE = False
     AlternatingLeastSquares = None
     warnings.warn(
-        "implicit library not installed. Run: pip install implicit\n"
-        "ALS training will not be available."
+        "implicit library not installed in this runtime. Use the Linux Docker "
+        "training image: ./docker.ps1 train"
     )
 
 from .model_init import ALSModelInitializer, quick_initialize_als
@@ -49,20 +54,20 @@ logger = logging.getLogger(__name__)
 
 class ALSTrainer:
     """
-    Train ALS models with progress tracking and checkpointing.
+    Train ALS models with fit-level tracking and final checkpointing.
     
     This class manages the complete training lifecycle:
-    1. Model fitting with progress monitoring
-    2. Checkpoint saves at regular intervals
-    3. Training metrics tracking (time, memory, loss)
-    4. Optional validation-based early stopping
+    1. Model fitting through implicit's blocking fit() call
+    2. Final checkpoint save after fit completes
+    3. Training metrics tracking (time, memory)
+    4. Optional post-fit validation callback
     5. Final model persistence
     
     Attributes:
         model: AlternatingLeastSquares model instance
         config: Training configuration dictionary
         checkpoint_dir: Directory for saving checkpoints
-        training_history: List of training metrics per iteration
+        training_history: List with one final fit-level metrics entry
     """
     
     def __init__(self, model: 'AlternatingLeastSquares', 
@@ -75,10 +80,10 @@ class ALSTrainer:
         
         Args:
             model: Initialized AlternatingLeastSquares model
-            checkpoint_dir: Directory for saving checkpoints (None = no checkpointing)
-            checkpoint_interval: Save checkpoint every N iterations
+            checkpoint_dir: Directory for saving final checkpoint (None = no checkpointing)
+            checkpoint_interval: Kept for API compatibility; implicit ALS cannot checkpoint mid-fit
             track_memory: Whether to track memory usage (adds overhead)
-            enable_validation: Whether to enable validation metrics computation
+            enable_validation: Whether to enable post-fit validation metrics computation
         
         Example:
             >>> from recsys.cf.model.als import ALSModelInitializer, ALSTrainer
@@ -93,7 +98,7 @@ class ALSTrainer:
         if not IMPLICIT_AVAILABLE:
             raise ImportError(
                 "implicit library required for ALS training. "
-                "Install with: pip install implicit"
+                "Run training inside the Linux Docker image: ./docker.ps1 train"
             )
         
         self.model = model
@@ -115,6 +120,10 @@ class ALSTrainer:
         if self.checkpoint_dir:
             self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
             logger.info(f"Checkpoint directory: {self.checkpoint_dir}")
+            logger.info(
+                "implicit ALS does not expose mid-fit checkpoint hooks; "
+                "saving one final checkpoint after fit() completes"
+            )
         
         logger.info(
             f"ALSTrainer initialized: "
@@ -141,7 +150,10 @@ class ALSTrainer:
         self.val_data = val_matrix
         self.val_callback = val_callback
         self.enable_validation = True
-        logger.info(f"Validation data set: shape={val_matrix.shape}")
+        logger.info(
+            f"Validation data set: shape={val_matrix.shape}. "
+            "implicit ALS validation runs after fit(), not per iteration."
+        )
     
     def _log_iteration_start(self, iteration: int, total_iterations: int) -> Dict[str, Any]:
         """
@@ -305,24 +317,28 @@ class ALSTrainer:
     
     def fit(self, X_train: csr_matrix, show_progress: bool = True) -> Dict[str, Any]:
         """
-        Fit ALS model with progress tracking and checkpointing.
+        Fit ALS model with fit-level tracking and optional final checkpointing.
         
         This method wraps the implicit library's fit() method and adds:
-        - Progress logging per iteration
-        - Checkpoint saves at regular intervals
+        - Fit-level progress logging
+        - Final checkpoint save after the blocking fit() call
         - Training metrics collection
-        - Optional validation metrics computation
+        - Optional post-fit validation metrics computation
+
+        implicit does not expose per-iteration hooks, so checkpoint_interval,
+        validation callbacks, and early stopping cannot run between ALS
+        iterations in this implementation.
         
         Args:
             X_train: Training CSR matrix (users × items)
-                    Note: Will be transposed to (items × users) for implicit library
+                    This matches implicit>=0.7: rows are users, columns are items.
             show_progress: Whether to show progress bar (from implicit library)
         
         Returns:
             Dictionary with training summary:
                 - total_duration_seconds: Total training time
                 - iterations_completed: Number of iterations completed
-                - training_history: List of per-iteration metrics
+                - training_history: One fit-level metrics entry
                 - final_user_factors_shape: Shape of learned user embeddings
                 - final_item_factors_shape: Shape of learned item embeddings
         
@@ -353,9 +369,9 @@ class ALSTrainer:
         self.start_time = time.time()
         self.training_history = []
         
-        # Transpose for implicit library (expects items × users)
-        X_train_T = X_train.T.tocsr()
-        logger.info("Matrix transposed for implicit library (items × users)")
+        # implicit>=0.7 expects user_items: rows are users, columns are items.
+        X_train_T = X_train.tocsr()
+        logger.info("Using user-item matrix for implicit library (users x items)")
         
         total_iterations = self.model.iterations
         
@@ -390,6 +406,11 @@ class ALSTrainer:
                 process = psutil.Process()
                 mem_info = process.memory_info()
                 final_metrics['memory_rss_mb'] = mem_info.rss / 1024 / 1024
+
+            val_metrics = self._compute_validation_metrics(total_iterations)
+            if val_metrics:
+                final_metrics['validation'] = val_metrics
+                logger.info(f"Post-fit validation metrics: {val_metrics}")
             
             self.training_history.append(final_metrics)
             
@@ -413,6 +434,8 @@ class ALSTrainer:
             'iterations_completed': total_iterations,
             'avg_iteration_time': fit_duration / total_iterations,
             'training_history': self.training_history,
+            'history_granularity': 'fit',
+            'supports_iteration_callbacks': False,
             'final_user_factors_shape': tuple(self.model.user_factors.shape),
             'final_item_factors_shape': tuple(self.model.item_factors.shape),
             'checkpoint_dir': str(self.checkpoint_dir) if self.checkpoint_dir else None,
@@ -509,15 +532,20 @@ class ALSTrainer:
         lines = [
             "=== ALS Training Summary ===",
             f"Model fitted: {self.is_fitted}",
-            f"Iterations completed: {len(self.training_history)}",
         ]
         
         if self.training_history:
             last_metrics = self.training_history[-1]
             total_time = sum(m.get('duration_seconds', 0) for m in self.training_history)
+            iterations_completed = last_metrics.get('iteration', len(self.training_history))
             
+            lines.append(f"Iterations completed: {iterations_completed}")
+            lines.append("History granularity: fit")
             lines.append(f"Total training time: {total_time:.2f}s")
-            lines.append(f"Average iteration time: {total_time / len(self.training_history):.2f}s")
+            lines.append(
+                f"Average iteration time: "
+                f"{last_metrics.get('avg_iteration_time', total_time / max(iterations_completed, 1)):.2f}s"
+            )
             
             if 'memory_peak_mb' in last_metrics:
                 lines.append(f"Peak memory usage: {last_metrics['memory_peak_mb']:.1f}MB")
@@ -554,15 +582,15 @@ def train_als_model(X_train: csr_matrix,
     
     This function handles:
     1. Model initialization with config
-    2. Trainer setup with checkpointing
+    2. Trainer setup with optional final checkpointing
     3. Model fitting with progress tracking
     4. Return trained model and summary
     
     Args:
         X_train: Training CSR matrix (users × items)
         config: Model configuration (factors, regularization, etc.)
-        checkpoint_dir: Directory for checkpoints (None = no checkpointing)
-        checkpoint_interval: Save checkpoint every N iterations
+        checkpoint_dir: Directory for final checkpoint (None = no checkpointing)
+        checkpoint_interval: Kept for API compatibility; implicit ALS cannot checkpoint mid-fit
         track_memory: Whether to track memory usage
         show_progress: Whether to show progress bar
     

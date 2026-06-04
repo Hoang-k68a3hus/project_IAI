@@ -74,6 +74,46 @@ class MatrixBuilder:
         self.hard_negative_threshold = hard_negative_threshold
         self.top_k_popular = top_k_popular
         self.build_metadata = {}
+
+    def _aggregate_duplicate_pairs(
+        self,
+        interactions_df: pd.DataFrame,
+        user_col: str,
+        item_col: str,
+        value_col: Optional[str] = None
+    ) -> Tuple[pd.DataFrame, int]:
+        """Collapse duplicate user-item rows before CSR construction."""
+        duplicate_mask = interactions_df.duplicated(
+            subset=[user_col, item_col],
+            keep=False
+        )
+        duplicate_rows = int(duplicate_mask.sum())
+
+        if duplicate_rows == 0:
+            return interactions_df, 0
+
+        duplicate_pairs = interactions_df.loc[
+            duplicate_mask, [user_col, item_col]
+        ].drop_duplicates().shape[0]
+        logger.warning(
+            "Found %s duplicate rows across %s user-item pairs; aggregating before CSR build",
+            duplicate_rows,
+            duplicate_pairs,
+        )
+
+        if value_col is None:
+            aggregated = interactions_df.drop_duplicates(
+                subset=[user_col, item_col],
+                keep='first'
+            )
+        else:
+            aggregated = (
+                interactions_df
+                .groupby([user_col, item_col], as_index=False)[value_col]
+                .max()
+            )
+
+        return aggregated, duplicate_rows
     
     def build_confidence_matrix(
         self,
@@ -102,13 +142,37 @@ class MatrixBuilder:
         logger.info(f"  Matrix shape: ({num_users}, {num_items})")
         logger.info(f"  Value column: {value_col}")
         logger.info(f"  Input interactions: {len(interactions_df)}")
+
+        df_matrix, duplicate_rows = self._aggregate_duplicate_pairs(
+            interactions_df,
+            user_col=user_col,
+            item_col=item_col,
+            value_col=value_col
+        )
+
+        if len(df_matrix) == 0:
+            logger.warning("No interactions available for confidence matrix")
+            matrix = csr_matrix((num_users, num_items), dtype=np.float32)
+            self.build_metadata['confidence_matrix'] = {
+                'shape': (num_users, num_items),
+                'nnz': 0,
+                'sparsity': 1.0,
+                'input_interactions': int(len(interactions_df)),
+                'aggregated_interactions': 0,
+                'duplicate_rows_aggregated': int(duplicate_rows),
+            }
+            return matrix
         
         # Extract arrays
-        rows = interactions_df[user_col].values
-        cols = interactions_df[item_col].values
-        data = interactions_df[value_col].values
+        rows = df_matrix[user_col].values
+        cols = df_matrix[item_col].values
+        data = df_matrix[value_col].values
         
         # Validate indices
+        if rows.min() < 0:
+            raise ValueError(f"User index {rows.min()} is negative")
+        if cols.min() < 0:
+            raise ValueError(f"Item index {cols.min()} is negative")
         if rows.max() >= num_users:
             raise ValueError(f"User index {rows.max()} exceeds num_users {num_users}")
         if cols.max() >= num_items:
@@ -123,7 +187,8 @@ class MatrixBuilder:
         
         # Log statistics
         nnz = matrix.nnz
-        sparsity = 1.0 - (nnz / (num_users * num_items))
+        total_cells = num_users * num_items
+        sparsity = 1.0 if total_cells == 0 else 1.0 - (nnz / total_cells)
         
         logger.info(f"  Non-zero entries: {nnz:,}")
         logger.info(f"  Sparsity: {sparsity:.6f} ({sparsity*100:.4f}%)")
@@ -134,6 +199,9 @@ class MatrixBuilder:
             'shape': (num_users, num_items),
             'nnz': int(nnz),
             'sparsity': float(sparsity),
+            'input_interactions': int(len(interactions_df)),
+            'aggregated_interactions': int(len(df_matrix)),
+            'duplicate_rows_aggregated': int(duplicate_rows),
             'value_range': (float(data.min()), float(data.max())),
             'value_mean': float(data.mean()),
             'value_std': float(data.std())
@@ -174,11 +242,41 @@ class MatrixBuilder:
             logger.info(f"  Filtered to {len(df_filtered)} positive interactions")
         else:
             df_filtered = interactions_df.copy()
+
+        df_filtered, duplicate_rows = self._aggregate_duplicate_pairs(
+            df_filtered,
+            user_col=user_col,
+            item_col=item_col,
+            value_col=None
+        )
+
+        if len(df_filtered) == 0:
+            logger.warning("No interactions available for binary matrix")
+            matrix = csr_matrix((num_users, num_items), dtype=np.float32)
+            self.build_metadata['binary_matrix'] = {
+                'shape': (num_users, num_items),
+                'nnz': 0,
+                'sparsity': 1.0,
+                'positive_only': positive_only,
+                'input_interactions': int(len(interactions_df)),
+                'aggregated_interactions': 0,
+                'duplicate_rows_aggregated': int(duplicate_rows),
+            }
+            return matrix
         
         # Extract arrays (all values = 1)
         rows = df_filtered[user_col].values
         cols = df_filtered[item_col].values
         data = np.ones(len(df_filtered), dtype=np.float32)
+
+        if rows.min() < 0:
+            raise ValueError(f"User index {rows.min()} is negative")
+        if cols.min() < 0:
+            raise ValueError(f"Item index {cols.min()} is negative")
+        if rows.max() >= num_users:
+            raise ValueError(f"User index {rows.max()} exceeds num_users {num_users}")
+        if cols.max() >= num_items:
+            raise ValueError(f"Item index {cols.max()} exceeds num_items {num_items}")
         
         # Build CSR matrix
         matrix = csr_matrix(
@@ -188,7 +286,8 @@ class MatrixBuilder:
         )
         
         nnz = matrix.nnz
-        sparsity = 1.0 - (nnz / (num_users * num_items))
+        total_cells = num_users * num_items
+        sparsity = 1.0 if total_cells == 0 else 1.0 - (nnz / total_cells)
         
         logger.info(f"  Non-zero entries: {nnz:,}")
         logger.info(f"  Sparsity: {sparsity:.6f}")
@@ -198,7 +297,10 @@ class MatrixBuilder:
             'shape': (num_users, num_items),
             'nnz': int(nnz),
             'sparsity': float(sparsity),
-            'positive_only': positive_only
+            'positive_only': positive_only,
+            'input_interactions': int(len(interactions_df)),
+            'aggregated_interactions': int(len(df_filtered)),
+            'duplicate_rows_aggregated': int(duplicate_rows),
         }
         
         return matrix

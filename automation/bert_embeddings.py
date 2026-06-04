@@ -192,12 +192,55 @@ def save_embeddings(
     return output_file
 
 
+def inspect_embeddings_file(output_file: Path) -> Dict[str, Any]:
+    """Inspect existing embeddings without loading the transformer model."""
+    if not output_file.exists():
+        return {
+            "exists": False,
+            "path": str(output_file),
+            "needs_refresh": True,
+            "message": "Embeddings file not found",
+        }
+
+    mtime = datetime.fromtimestamp(output_file.stat().st_mtime)
+    age_days = (datetime.now() - mtime).days
+    info: Dict[str, Any] = {
+        "exists": True,
+        "path": str(output_file),
+        "age_days": age_days,
+        "size_bytes": output_file.stat().st_size,
+        "needs_refresh": age_days >= 7,
+    }
+
+    try:
+        data = torch.load(output_file, map_location="cpu", weights_only=True)
+        if isinstance(data, dict):
+            embeddings = data.get("embeddings", data.get("item_embeddings"))
+            product_ids = data.get("product_ids", data.get("item_ids"))
+            metadata = data.get("metadata", {})
+            info.update(
+                {
+                    "loadable": True,
+                    "num_products": len(product_ids) if product_ids is not None else None,
+                    "shape": list(embeddings.shape) if hasattr(embeddings, "shape") else None,
+                    "metadata": metadata if isinstance(metadata, dict) else {},
+                }
+            )
+        else:
+            info.update({"loadable": False, "error": "Unexpected embeddings format"})
+    except Exception as exc:
+        info.update({"loadable": False, "error": str(exc)})
+
+    return info
+
+
 # =============================================================================
 # Main Pipeline
 # =============================================================================
 
 def refresh_bert_embeddings(
     force: bool = False,
+    check_only: bool = False,
     logger: Optional[logging.Logger] = None,
 ) -> Dict[str, Any]:
     """
@@ -205,6 +248,7 @@ def refresh_bert_embeddings(
 
     Args:
         force: Force refresh even if embeddings exist
+        check_only: Inspect current embeddings without regenerating
         logger: Logger instance
 
     Returns:
@@ -228,11 +272,38 @@ def refresh_bert_embeddings(
             result["message"] = msg
             return result
 
-        run_id = tracker.start_run("bert_embeddings", {"force": force})
+        run_id = tracker.start_run(
+            "bert_embeddings",
+            {"force": force, "check_only": check_only},
+        )
 
         try:
             # Check if refresh needed
             output_file = BERT_CONFIG["output_dir"] / BERT_CONFIG["output_file"]
+
+            if check_only:
+                inspection = inspect_embeddings_file(output_file)
+                result.update(
+                    {
+                        "status": "success",
+                        "mode": "check_only",
+                        "finished_at": datetime.now().isoformat(),
+                        "inspection": inspection,
+                    }
+                )
+                tracker.complete_run(
+                    run_id,
+                    {
+                        "status": "success",
+                        "mode": "check_only",
+                        "exists": inspection.get("exists", False),
+                        "loadable": inspection.get("loadable", False),
+                        "needs_refresh": inspection.get("needs_refresh", True),
+                    },
+                )
+                logger.info("BERT embeddings check completed: %s", inspection)
+                return result
+
             if output_file.exists() and not force:
                 # Check age
                 mtime = datetime.fromtimestamp(output_file.stat().st_mtime)
@@ -321,6 +392,11 @@ def main() -> None:
         help="Force refresh even if embeddings are fresh",
     )
     parser.add_argument(
+        "--check-only",
+        action="store_true",
+        help="Inspect existing embeddings without regenerating them",
+    )
+    parser.add_argument(
         "--verbose",
         "-v",
         action="store_true",
@@ -335,6 +411,7 @@ def main() -> None:
     try:
         result = refresh_bert_embeddings(
             force=args.force,
+            check_only=args.check_only,
             logger=logger,
         )
 
@@ -343,9 +420,19 @@ def main() -> None:
         print(f"{'=' * 60}")
 
         if result["status"] == "success":
-            print(f"  Products: {result['num_products']}")
-            print(f"  Duration: {result['duration_seconds']:.1f}s")
-            print(f"  Output: {result['output_file']}")
+            if result.get("mode") == "check_only":
+                inspection = result.get("inspection", {})
+                print(f"  Output: {inspection.get('path')}")
+                print(f"  Exists: {inspection.get('exists')}")
+                print(f"  Loadable: {inspection.get('loadable')}")
+                print(f"  Age days: {inspection.get('age_days')}")
+                print(f"  Needs refresh: {inspection.get('needs_refresh')}")
+                if inspection.get("shape"):
+                    print(f"  Shape: {inspection.get('shape')}")
+            else:
+                print(f"  Products: {result['num_products']}")
+                print(f"  Duration: {result['duration_seconds']:.1f}s")
+                print(f"  Output: {result['output_file']}")
         elif result.get("message"):
             print(f"  Message: {result['message']}")
 

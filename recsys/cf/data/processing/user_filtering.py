@@ -244,8 +244,12 @@ class UserFilter:
                 trainable_df[rating_col] >= self.positive_threshold
             ].groupby(item_col).size()
             
-            # Identify cold items (< min positives)
-            cold_items = item_pos_counts[item_pos_counts < self.min_item_positives].index
+            # Identify cold items, including items with zero positives from trainable users.
+            warm_items = set(
+                item_pos_counts[item_pos_counts >= self.min_item_positives].index
+            )
+            all_items = set(interactions_df[item_col].unique())
+            cold_items = all_items - warm_items
             num_cold_items = len(cold_items)
             
             if num_cold_items == 0:
@@ -326,21 +330,66 @@ class UserFilter:
         logger.info("# STEP 2.3: COMPLETE USER & ITEM FILTERING PIPELINE")
         logger.info("#"*80)
         
-        # Step 1: User segmentation
-        interactions_df, user_stats = self.segment_users(
-            interactions_df, user_col, rating_col
-        )
-        
-        # Step 2: Iterative item filtering
-        interactions_df, item_stats = self.filter_items_iteratively(
-            interactions_df, item_col, rating_col
-        )
-        
-        # Recompute user stats after item filtering
+        # User segmentation and item filtering affect each other: removing
+        # cold items can make a previously trainable user fall below threshold.
+        max_outer_iterations = 5
+        item_stats_history = []
+        user_stats = {}
+
+        for outer_iteration in range(1, max_outer_iterations + 1):
+            logger.info("Outer filtering iteration %d/%d", outer_iteration, max_outer_iterations)
+
+            interactions_df, user_stats = self.segment_users(
+                interactions_df, user_col, rating_col
+            )
+
+            interactions_df, item_stats = self.filter_items_iteratively(
+                interactions_df, item_col, rating_col
+            )
+            item_stats_history.append(item_stats)
+
+            if interactions_df.empty:
+                logger.warning("All interactions were removed by item filtering")
+                break
+
+            # Recompute trainable flags after item removal.
+            interactions_df, user_stats = self.segment_users(
+                interactions_df, user_col, rating_col
+            )
+
+            if item_stats.get('items_removed', 0) == 0:
+                logger.info("Outer filtering converged after %d iteration(s)", outer_iteration)
+                break
+        else:
+            logger.warning(
+                "Reached max outer filtering iterations (%d); final segmentation was still recomputed",
+                max_outer_iterations,
+            )
+
+        initial_items = item_stats_history[0]['initial_items'] if item_stats_history else 0
+        final_items = interactions_df[item_col].nunique()
+        item_stats = {
+            'initial_items': initial_items,
+            'final_items': final_items,
+            'items_removed': initial_items - final_items,
+            'initial_interactions': item_stats_history[0]['initial_interactions'] if item_stats_history else len(interactions_df),
+            'final_interactions': len(interactions_df),
+            'retention_rate': (
+                len(interactions_df) / item_stats_history[0]['initial_interactions'] * 100
+                if item_stats_history and item_stats_history[0]['initial_interactions'] else 0.0
+            ),
+            'iterations': sum(s.get('iterations', 0) for s in item_stats_history),
+            'outer_iterations': len(item_stats_history),
+        }
+
+        # Recompute final stats after item filtering.
         trainable_df = interactions_df[interactions_df['is_trainable_user']]
         num_trainable_users = trainable_df[user_col].nunique()
         num_items = interactions_df[item_col].nunique()
-        matrix_density = len(trainable_df) / (num_trainable_users * num_items) * 100
+        matrix_density = (
+            len(trainable_df) / (num_trainable_users * num_items) * 100
+            if num_trainable_users and num_items else 0.0
+        )
         
         logger.info("\n" + "="*80)
         logger.info("FINAL FILTERING SUMMARY")

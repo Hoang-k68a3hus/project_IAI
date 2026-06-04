@@ -24,6 +24,7 @@ pyarrow==18.1.0
 # Scientific Computing & ML
 # =============================================================================
 scipy==1.14.1
+scikit-learn==1.5.2
 
 # Collaborative Filtering (ALS/BPR) - requires OpenBLAS
 implicit==0.7.2

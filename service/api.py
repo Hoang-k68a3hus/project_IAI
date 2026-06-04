@@ -185,12 +185,11 @@ async def lifespan(app: FastAPI):
         # Warm up search service (pre-load PhoBERT model to avoid 30s latency on first query)
         logger.info("Warming up search service (PhoBERT model)...")
         try:
-            from service.search import get_search_service
-            search_service = get_search_service()
+            service = get_search_service()
             # Trigger model loading with a simple query
             import time
             warmup_start = time.perf_counter()
-            _ = search_service.search("kem dưỡng da", topk=1)
+            _ = service.search("kem duong da", topk=1)
             warmup_elapsed = (time.perf_counter() - warmup_start) * 1000
             logger.info(f"Search service warmup complete: PhoBERT loaded in {warmup_elapsed:.1f}ms")
         except Exception as e:

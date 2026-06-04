@@ -26,7 +26,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from .sampler import TripletSampler
+from .sampler import TripletSampler, merge_user_exclusion_sets
 
 logger = logging.getLogger(__name__)
 
@@ -334,11 +334,17 @@ class BPRTrainer:
         start_time = time.time()
         
         # Initialize sampler
+        user_exclusion_sets = (
+            merge_user_exclusion_sets(user_pos_sets, val_user_pos_test)
+            if val_user_pos_test is not None
+            else None
+        )
         sampler = TripletSampler(
             positive_pairs=positive_pairs,
             user_pos_sets=user_pos_sets,
             num_items=num_items,
             hard_neg_sets=hard_neg_sets,
+            user_exclusion_sets=user_exclusion_sets,
             hard_ratio=hard_ratio,
             samples_per_positive=samples_per_positive,
             random_seed=self.random_seed
@@ -513,7 +519,7 @@ class BPRTrainer:
                 
                 # Compute recall@k
                 hits = len(set(top_k) & test_items)
-                recalls.append(hits / min(len(test_items), k))
+                recalls.append(hits / len(test_items))
                 
                 # Compute NDCG@k
                 dcg = 0.0

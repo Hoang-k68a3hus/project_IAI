@@ -471,7 +471,11 @@ def normalize_embeddings(U: np.ndarray, V: np.ndarray) -> Tuple[np.ndarray, np.n
     return U_norm, V_norm
 
 
-def compute_embedding_quality_score(U: np.ndarray, V: np.ndarray) -> Dict[str, float]:
+def compute_embedding_quality_score(
+    U: np.ndarray,
+    V: np.ndarray,
+    random_seed: Optional[int] = 42
+) -> Dict[str, float]:
     """
     Compute quality metrics for embeddings.
     
@@ -483,6 +487,8 @@ def compute_embedding_quality_score(U: np.ndarray, V: np.ndarray) -> Dict[str, f
     Args:
         U: User embeddings
         V: Item embeddings
+        random_seed: Seed for sample-based orthogonality metrics. Set to
+            None for non-deterministic sampling.
     
     Returns:
         Dictionary with quality scores
@@ -500,9 +506,11 @@ def compute_embedding_quality_score(U: np.ndarray, V: np.ndarray) -> Dict[str, f
     item_norm_cv = v_norms.std() / v_norms.mean() if v_norms.mean() > 0 else 0
     
     # Orthogonality (sample-based for efficiency)
-    sample_size = min(100, U.shape[0])
-    u_sample = U[np.random.choice(U.shape[0], sample_size, replace=False)]
-    v_sample = V[np.random.choice(V.shape[0], sample_size, replace=False)]
+    rng = np.random.default_rng(random_seed)
+    u_sample_size = min(100, U.shape[0])
+    v_sample_size = min(100, V.shape[0])
+    u_sample = U[rng.choice(U.shape[0], u_sample_size, replace=False)]
+    v_sample = V[rng.choice(V.shape[0], v_sample_size, replace=False)]
     
     # Normalize samples
     u_sample_norm = u_sample / (np.linalg.norm(u_sample, axis=1, keepdims=True) + 1e-8)
@@ -562,7 +570,7 @@ if __name__ == "__main__":
         
         # Fit model
         print("Training model...")
-        model.fit(X_train.T.tocsr(), show_progress=False)
+        model.fit(X_train.tocsr(), show_progress=False)
         print("Model trained!")
         
         # Example 1: Extract embeddings without normalization

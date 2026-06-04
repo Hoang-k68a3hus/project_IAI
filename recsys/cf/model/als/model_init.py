@@ -28,8 +28,8 @@ except ImportError:
     IMPLICIT_AVAILABLE = False
     AlternatingLeastSquares = None  # For type hints
     warnings.warn(
-        "implicit library not installed. Run: pip install implicit\n"
-        "ALS training will not be available."
+        "implicit library not installed in this runtime. Use the Linux Docker "
+        "training image: ./docker.ps1 train"
     )
 
 import numpy as np
@@ -129,7 +129,7 @@ class ALSModelInitializer:
         if not IMPLICIT_AVAILABLE:
             raise ImportError(
                 "implicit library required for ALS training. "
-                "Install with: pip install implicit"
+                "Run training inside the Linux Docker image: ./docker.ps1 train"
             )
         
         self.model = None
@@ -543,7 +543,7 @@ def quick_initialize_als(factors: int = 64, regularization: float = 0.01,
     """
     if not IMPLICIT_AVAILABLE:
         raise ImportError(
-            "implicit library required. Install with: pip install implicit"
+            "implicit library required. Run training inside Docker: ./docker.ps1 train"
         )
     
     logger.info(f"Quick initializing ALS: factors={factors}, alpha={alpha}")

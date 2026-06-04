@@ -232,9 +232,22 @@ class BPRModelInitializer:
             projected[:, :bert_dim] = bert_embeddings
             logger.info(f"BERT embeddings padded: {bert_dim} -> {self.factors}")
         
-        # Normalize scale
-        scale_factor = self.init_std / projected.std()
-        projected = (projected * scale_factor).astype(np.float32)
+        # Match random initialization scale so BERT-initialized and random
+        # fallback item factors start from a comparable distribution.
+        projected = projected - projected.mean()
+        projected_std = projected.std()
+        if projected_std > 1e-12:
+            projected = projected * (self.init_std / projected_std)
+        else:
+            logger.warning(
+                "BERT projection has near-zero variance; falling back to random item init scale"
+            )
+            projected = self.rng.normal(
+                loc=0.0,
+                scale=self.init_std,
+                size=projected.shape
+            )
+        projected = projected.astype(np.float32)
         
         # Create V matrix
         V = self.rng.normal(

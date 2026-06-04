@@ -26,6 +26,12 @@ from scripts.utils import (  # type: ignore
     send_pipeline_alert,
 )
 
+from recsys.cf.contracts import (
+    atomic_write_json,
+    get_current_best_model_id,
+    normalize_registry,
+)
+
 
 # =============================================================================
 # Configuration
@@ -211,29 +217,19 @@ def cleanup_old_models(
 
     try:
         with open(registry_path, "r") as f:
-            registry = json.load(f)
+            registry = normalize_registry(json.load(f))
     except Exception as e:
         result["errors"].append(f"Failed to load registry: {e}")
         return result
 
     models_data = registry.get("models", {})
-    current_best_data = registry.get("current_best")
-
-    # Get current_best model_id
-    if isinstance(current_best_data, dict):
-        current_best = current_best_data.get("model_id")
-    else:
-        current_best = current_best_data
+    current_best = get_current_best_model_id(registry)
 
     # Convert to list of tuples for sorting
-    if isinstance(models_data, dict):
-        models_list = [
-            (model_id, model_info)
-            for model_id, model_info in models_data.items()
-        ]
-    else:
-        # Old list format
-        models_list = [(m.get("model_id"), m) for m in models_data]
+    models_list = [
+        (model_id, model_info)
+        for model_id, model_info in models_data.items()
+    ]
 
     # Sort by creation date (newest first)
     sorted_models = sorted(
@@ -310,8 +306,8 @@ def cleanup_old_models(
     # Update registry (remove deleted models)
     if not dry_run and result["models_deleted"] > 0:
         registry["models"] = models_to_keep
-        with open(registry_path, "w") as f:
-            json.dump(registry, f, indent=2)
+        registry = normalize_registry(registry)
+        atomic_write_json(registry_path, registry)
         logger.info(
             "\nUpdated registry: %d models remaining",
             len(models_to_keep),

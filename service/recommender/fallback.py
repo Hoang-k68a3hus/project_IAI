@@ -237,9 +237,13 @@ class FallbackRecommender:
         # Get mappings
         mappings = self.loader.mappings
         if mappings is None:
-            self.loader.load_mappings()
+            self.loader.load_mappings(raise_if_missing=False)
             mappings = self.loader.mappings
-        
+
+        if not mappings:
+            logger.warning("No mappings available for popularity fallback")
+            return []
+
         idx_to_item = mappings.get('idx_to_item', {})
         popularity_scores = self._get_item_popularity()
         

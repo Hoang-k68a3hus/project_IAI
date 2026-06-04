@@ -514,7 +514,7 @@ class BERTEnhancedBPR:
         Returns:
             Training summary dictionary
         """
-        from .bpr.sampler import TripletSampler
+        from .bpr.sampler import TripletSampler, merge_user_exclusion_sets
         
         logger.info("="*60)
         logger.info("Starting BERT-Enhanced BPR Training")
@@ -537,11 +537,17 @@ class BERTEnhancedBPR:
             logger.info("Sentiment weighting disabled (uniform weights)")
         
         # Initialize sampler
+        user_exclusion_sets = (
+            merge_user_exclusion_sets(user_pos_sets, val_user_pos_test)
+            if val_user_pos_test is not None
+            else None
+        )
         sampler = TripletSampler(
             positive_pairs=positive_pairs,
             user_pos_sets=user_pos_sets,
             num_items=num_items,
             hard_neg_sets=hard_neg_sets or {},
+            user_exclusion_sets=user_exclusion_sets,
             hard_ratio=hard_ratio,
             samples_per_positive=samples_per_positive,
             random_seed=self.random_seed
@@ -726,7 +732,7 @@ class BERTEnhancedBPR:
                 
                 # Recall@k
                 hits = len(set(top_k) & test_items)
-                recalls.append(hits / min(len(test_items), k))
+                recalls.append(hits / len(test_items))
                 
                 # NDCG@k
                 dcg = sum(1.0 / np.log2(rank + 2) for rank, item in enumerate(top_k) if item in test_items)

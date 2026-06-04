@@ -152,16 +152,7 @@ class CFRecommender:
             
             self.U = model['U']
             self.V = model['V']
-            
-            # Handle swapped matrices: if U.shape[0] is small (items), matrices are swapped
-            # In that case, user embeddings are in V, item embeddings are in U
-            if self.U.shape[0] < 10000:  # Likely items, not users (heuristic)
-                # Matrices are swapped: num_items is U.shape[0]
-                self.num_items = self.U.shape[0]
-                logger.info(f"Detected swapped matrices: U={self.U.shape} (items), V={self.V.shape} (users)")
-            else:
-                # Normal case: num_items is V.shape[0]
-                self.num_items = self.V.shape[0]
+            self.num_items = self.V.shape[0]
             
             self.model_id = model['model_id']
             self.score_range = model.get('score_range', {})
@@ -379,14 +370,37 @@ class CFRecommender:
         
         # Check if running in empty mode (no model loaded)
         if self.U is None or self.V is None:
-            logger.warning(f"No CF model loaded - returning empty result for user {user_id}")
+            logger.warning(f"No CF model loaded - using fallback for user {user_id}")
+            use_rerank = rerank if rerank is not None else self.enable_reranking
+            candidate_k = topk * 5 if use_rerank else topk
+            user_history = list(self.loader.get_user_history(user_id))
+            fallback_recs = self.fallback.recommend(
+                user_id=user_id,
+                user_history=user_history,
+                topk=candidate_k,
+                strategy='hybrid',
+                filter_params=filter_params
+            )
+
+            if use_rerank and fallback_recs:
+                rerank_result = self.reranker.rerank_cold_start(
+                    recommendations=fallback_recs,
+                    user_history=user_history,
+                    topk=topk
+                )
+                fallback_recs = rerank_result.recommendations
+
+            fallback_method = 'no_model'
+            if fallback_recs:
+                fallback_method = fallback_recs[0].get('fallback_method', 'hybrid')
+
             latency = (time.perf_counter() - start_time) * 1000
             return RecommendationResult(
                 user_id=user_id,
-                recommendations=[],
-                count=0,
+                recommendations=fallback_recs,
+                count=len(fallback_recs),
                 is_fallback=True,
-                fallback_method='no_model',
+                fallback_method=fallback_method,
                 latency_ms=latency,
                 model_id=None
             )
@@ -461,32 +475,16 @@ class CFRecommender:
                 model_id=None
             )
         
-        # Handle swapped matrices: if U.shape[0] is small (items), matrices are swapped
-        # In that case, user embeddings are in V, item embeddings are in U
-        if self.U.shape[0] < 10000:  # Likely items, not users (heuristic)
-            # Matrices are swapped: user embeddings in V, item embeddings in U
-            if u_idx_cf >= self.V.shape[0]:
-                logger.warning(f"User {user_id}: u_idx_cf={u_idx_cf} >= V.shape[0]={self.V.shape[0]} (swapped matrices)")
-                fallback_recs = self.fallback.recommend(user_id=user_id, topk=topk, strategy='popularity')
-                latency = (time.perf_counter() - start_time) * 1000
-                return RecommendationResult(
-                    user_id=user_id, recommendations=fallback_recs, count=len(fallback_recs),
-                    is_fallback=True, fallback_method='popularity', latency_ms=latency, model_id=None
-                )
-            # Compute CF scores: V[u_idx_cf] @ U.T (swapped)
-            scores = self.V[u_idx_cf] @ self.U.T  # Shape: (num_items,)
-        else:
-            # Normal case: U contains user embeddings, V contains item embeddings
-            if u_idx_cf >= self.U.shape[0]:
-                logger.warning(f"User {user_id}: u_idx_cf={u_idx_cf} >= U.shape[0]={self.U.shape[0]}")
-                fallback_recs = self.fallback.recommend(user_id=user_id, topk=topk, strategy='popularity')
-                latency = (time.perf_counter() - start_time) * 1000
-                return RecommendationResult(
-                    user_id=user_id, recommendations=fallback_recs, count=len(fallback_recs),
-                    is_fallback=True, fallback_method='popularity', latency_ms=latency, model_id=None
-                )
-            # Compute CF scores: U[u_idx_cf] @ V.T
-            scores = self.U[u_idx_cf] @ self.V.T  # Shape: (num_items,)
+        if u_idx_cf >= self.U.shape[0]:
+            logger.warning(f"User {user_id}: u_idx_cf={u_idx_cf} >= U.shape[0]={self.U.shape[0]}")
+            fallback_recs = self.fallback.recommend(user_id=user_id, topk=topk, strategy='popularity')
+            latency = (time.perf_counter() - start_time) * 1000
+            return RecommendationResult(
+                user_id=user_id, recommendations=fallback_recs, count=len(fallback_recs),
+                is_fallback=True, fallback_method='popularity', latency_ms=latency, model_id=None
+            )
+
+        scores = self.U[u_idx_cf] @ self.V.T  # Shape: (num_items,)
         
         # Normalize if requested
         if normalize_scores:
@@ -605,6 +603,33 @@ class CFRecommender:
         """
         start_time = time.perf_counter()
         results = {}
+
+        if self.U is None or self.V is None:
+            for uid in user_ids:
+                fallback_recs = self.fallback.recommend(
+                    user_id=uid,
+                    topk=topk,
+                    strategy='hybrid'
+                )
+                fallback_method = 'no_model'
+                if fallback_recs:
+                    fallback_method = fallback_recs[0].get('fallback_method', 'hybrid')
+
+                results[uid] = RecommendationResult(
+                    user_id=uid,
+                    recommendations=fallback_recs,
+                    count=len(fallback_recs),
+                    is_fallback=True,
+                    fallback_method=fallback_method,
+                    latency_ms=0,
+                    model_id=None
+                )
+
+            total_latency = (time.perf_counter() - start_time) * 1000
+            per_user_latency = total_latency / max(len(user_ids), 1)
+            for uid in results:
+                results[uid].latency_ms = per_user_latency
+            return results
         
         # Separate trainable vs cold-start users
         trainable_users = []

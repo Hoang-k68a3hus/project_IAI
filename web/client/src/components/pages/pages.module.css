@@ -1,0 +1,78 @@
+.wrapper {
+  width: min(100%, 48rem);
+  margin: 2rem auto 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+}
+
+.page,
+.ellipsis {
+  width: 2.35rem;
+  height: 2.35rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  font-size: 0.88rem;
+  font-weight: 700;
+}
+
+.page {
+  border: 1px solid var(--BORDER);
+  background: var(--SURFACE);
+  color: var(--NEUTRAL_7);
+  cursor: pointer;
+  transition: background 0.2s ease, border-color 0.2s ease, color 0.2s ease, transform 0.2s ease;
+}
+
+.page:hover:not(:disabled) {
+  transform: translateY(-1px);
+  border-color: rgba(15, 159, 122, 0.42);
+  background: var(--ACCENT_LIGHT);
+  color: var(--ACCENT_DARK);
+}
+
+.page:disabled {
+  cursor: not-allowed;
+  color: var(--NEUTRAL_3);
+  background: var(--NEUTRAL_1);
+}
+
+.active {
+  background: var(--NEUTRAL_8);
+  border-color: var(--NEUTRAL_8);
+  color: white;
+  box-shadow: 0 10px 20px rgba(36, 33, 31, 0.16);
+}
+
+.active:hover:not(:disabled) {
+  background: var(--NEUTRAL_8);
+  border-color: var(--NEUTRAL_8);
+  color: white;
+}
+
+.ellipsis {
+  color: var(--NEUTRAL_4);
+}
+
+.page :global(.material-symbols-outlined) {
+  font-size: 1.25rem;
+  line-height: 1;
+}
+
+@media (max-width: 520px) {
+  .wrapper {
+    gap: 0.32rem;
+    margin-top: 1.4rem;
+  }
+
+  .page,
+  .ellipsis {
+    width: 2rem;
+    height: 2rem;
+    font-size: 0.78rem;
+  }
+}

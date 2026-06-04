@@ -18,7 +18,7 @@ Key Features:
 - Continuous preference derivation (normalized)
 - Alpha scaling recommendations based on confidence range
 - Comprehensive validation and statistics
-- Ready for implicit library (transpose to item-user format)
+- Ready for implicit library (users x items for implicit>=0.7)
 
 Usage:
     >>> from recsys.cf.model.als.pre_data import ALSMatrixPreparer
@@ -473,20 +473,20 @@ class ALSMatrixPreparer:
     def prepare_for_implicit(
         self,
         X_confidence: csr_matrix,
-        transpose: bool = True
+        transpose: bool = False
     ) -> csr_matrix:
         """
-        Prepare matrix for implicit library (item-user format).
+        Prepare matrix for implicit library (users x items for implicit>=0.7).
         
         Args:
             X_confidence: Confidence matrix (user-item format)
-            transpose: If True, transpose to item-user format
+            transpose: Legacy option. Keep False for implicit>=0.7.
         
         Returns:
-            Matrix in implicit library format (items × users)
+            Matrix in implicit library format (users x items)
         
         Note:
-            implicit library expects shape (num_items, num_users)
+            implicit>=0.7 expects shape (num_users, num_items)
         
         Example:
             >>> X_conf, _ = preparer.prepare_confidence_matrix()
@@ -532,7 +532,7 @@ class ALSMatrixPreparer:
             Dict with all prepared matrices and metadata:
             {
                 'X_train_confidence': csr_matrix (user × item),
-                'X_train_implicit': csr_matrix (item × user, if prepare_for_training=True),
+                'X_train_implicit': csr_matrix (user x item, if prepare_for_training=True),
                 'P_binary': csr_matrix (optional),
                 'P_continuous': csr_matrix (optional),
                 'num_users': int,
@@ -593,8 +593,8 @@ class ALSMatrixPreparer:
         
         # Prepare for implicit library
         if prepare_for_training:
-            logger.info("\n[5/5] Preparing matrix for implicit library (transpose)...")
-            X_train_implicit = self.prepare_for_implicit(X_confidence, transpose=True)
+            logger.info("\n[5/5] Preparing matrix for implicit library (users x items)...")
+            X_train_implicit = self.prepare_for_implicit(X_confidence, transpose=False)
             results['X_train_implicit'] = X_train_implicit
         
         # Generate comprehensive training summary
@@ -613,7 +613,7 @@ class ALSMatrixPreparer:
         logger.info("="*80)
         logger.info(f"Matrix shape (user × item):    {X_confidence.shape}")
         if prepare_for_training:
-            logger.info(f"Matrix shape (item × user):    {results['X_train_implicit'].shape}")
+            logger.info(f"Matrix shape (users x items):  {results['X_train_implicit'].shape}")
         logger.info(f"Interactions:                  {X_confidence.nnz:,}")
         logger.info(f"Sparsity:                      {conf_stats['sparsity']:.4%}")
         logger.info(f"Mean confidence:               {conf_stats['mean_confidence']:.3f}")

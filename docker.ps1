@@ -4,7 +4,7 @@
 
 param(
     [Parameter(Position=0)]
-    [ValidateSet("build", "build-dev", "start", "stop", "restart", "logs", "train", "pipeline", "test", "shell", "status", "clean", "help")]
+    [ValidateSet("build", "build-dev", "start", "stop", "restart", "logs", "train", "train-als", "train-bpr", "pipeline", "test", "mlops-test", "shell", "status", "clean", "help")]
     [string]$Command = "help",
     
     [Parameter(Position=1)]
@@ -20,12 +20,12 @@ function Write-Header {
 
 function Write-Success {
     param([string]$Message)
-    Write-Host "✓ $Message" -ForegroundColor Green
+    Write-Host "[OK] $Message" -ForegroundColor Green
 }
 
 function Write-Warn {
     param([string]$Message)
-    Write-Host "⚠ $Message" -ForegroundColor Yellow
+    Write-Host "[WARN] $Message" -ForegroundColor Yellow
 }
 
 # ============================================================================
@@ -80,15 +80,24 @@ function Show-DockerLogs {
 
 function Start-DockerTrain {
     Write-Header "Running Training Pipeline"
-    docker compose --profile training up trainer
+    docker compose --profile training run --rm trainer python -m automation.model_training --auto-select
     if ($LASTEXITCODE -eq 0) {
         Write-Success "Training complete"
     }
 }
 
+function Start-DockerTrainModel {
+    param([string]$Model)
+    Write-Header "Running $Model Training Pipeline"
+    docker compose --profile training run --rm trainer python -m automation.model_training --model $Model --auto-select
+    if ($LASTEXITCODE -eq 0) {
+        Write-Success "$Model training complete"
+    }
+}
+
 function Start-DockerPipeline {
     Write-Header "Running Data Pipeline"
-    docker compose --profile pipeline up data-pipeline
+    docker compose --profile pipeline run --rm data-pipeline python scripts/run_task01_complete.py
     if ($LASTEXITCODE -eq 0) {
         Write-Success "Data pipeline complete"
     }
@@ -117,6 +126,74 @@ function Start-DockerTest {
     } else {
         Write-Warn "API not ready after 60 seconds"
     }
+}
+
+function Invoke-MlopsStep {
+    param(
+        [string]$Name,
+        [string[]]$DockerArgs,
+        [switch]$AllowWarning
+    )
+
+    Write-Host ""
+    Write-Host "[$Name]" -ForegroundColor Cyan
+    & docker @DockerArgs
+    $code = $LASTEXITCODE
+
+    if ($code -eq 0 -or ($AllowWarning.IsPresent -and $code -eq 1)) {
+        Write-Success "$Name passed"
+        return
+    }
+
+    throw "$Name failed with exit code $code"
+}
+
+function Start-DockerMlopsTest {
+    Write-Header "Testing MLOps Pipelines"
+
+    Invoke-MlopsStep -Name "automation modules" -DockerArgs @(
+        "compose", "--profile", "training", "run", "--rm",
+        "-e", "SERVICE_URL=http://api:8000",
+        "trainer", "python", "automation/test_modules.py"
+    )
+
+    Invoke-MlopsStep -Name "trainer imports" -DockerArgs @(
+        "compose", "--profile", "training", "run", "--rm",
+        "trainer", "python", "-c",
+        "import implicit, automation.model_training as m; print('trainer ok', implicit.__version__, m.TRAINING_CONFIG['als']['factors'])"
+    )
+
+    Invoke-MlopsStep -Name "deployment dry-run" -DockerArgs @(
+        "compose", "--profile", "training", "run", "--rm",
+        "-e", "SERVICE_URL=http://api:8000",
+        "trainer", "python", "-m", "automation.model_deployment", "--dry-run"
+    )
+
+    Invoke-MlopsStep -Name "data refresh dry-run" -DockerArgs @(
+        "compose", "--profile", "training", "run", "--rm",
+        "trainer", "python", "-m", "automation.data_refresh", "--dry-run", "--skip-merge"
+    )
+
+    Invoke-MlopsStep -Name "bert embeddings check" -DockerArgs @(
+        "compose", "--profile", "training", "run", "--rm",
+        "trainer", "python", "-m", "automation.bert_embeddings", "--check-only"
+    )
+
+    Invoke-MlopsStep -Name "cleanup dry-run" -DockerArgs @(
+        "compose", "--profile", "training", "run", "--rm",
+        "trainer", "python", "-m", "automation.cleanup", "--dry-run"
+    )
+
+    Invoke-MlopsStep -Name "drift detection" -DockerArgs @(
+        "compose", "--profile", "training", "run", "--rm",
+        "trainer", "python", "-m", "automation.drift_detection"
+    )
+
+    Invoke-MlopsStep -Name "health check" -DockerArgs @(
+        "compose", "--profile", "training", "run", "--rm",
+        "-e", "SERVICE_URL=http://api:8000",
+        "trainer", "python", "-m", "automation.health_check", "--json"
+    ) -AllowWarning
 }
 
 function Start-DockerShell {
@@ -148,9 +225,12 @@ function Show-Help {
     Write-Host "  stop        Stop all services"
     Write-Host "  restart     Restart all services"
     Write-Host "  logs [svc]  View logs (default: api)"
-    Write-Host "  train       Run training pipeline"
+    Write-Host "  train       Run training pipeline in Linux Docker"
+    Write-Host "  train-als   Run ALS training in Linux Docker"
+    Write-Host "  train-bpr   Run BPR training in Linux Docker"
     Write-Host "  pipeline    Run data processing pipeline"
     Write-Host "  test        Run API tests"
+    Write-Host "  mlops-test  Run MLOps smoke suite in Linux Docker"
     Write-Host "  shell       Open shell in API container"
     Write-Host "  status      Show service status"
     Write-Host "  clean       Remove containers and images"
@@ -161,6 +241,8 @@ function Show-Help {
     Write-Host "  .\docker.ps1 start          # Start services"
     Write-Host "  .\docker.ps1 logs dashboard # View dashboard logs"
     Write-Host "  .\docker.ps1 train          # Run training"
+    Write-Host "  .\docker.ps1 train-als      # Run ALS training only"
+    Write-Host "  .\docker.ps1 mlops-test     # Run MLOps smoke suite"
 }
 
 # ============================================================================
@@ -175,8 +257,11 @@ switch ($Command) {
     "restart"   { Restart-DockerServices }
     "logs"      { Show-DockerLogs -Svc $Service }
     "train"     { Start-DockerTrain }
+    "train-als" { Start-DockerTrainModel -Model "als" }
+    "train-bpr" { Start-DockerTrainModel -Model "bpr" }
     "pipeline"  { Start-DockerPipeline }
     "test"      { Start-DockerTest }
+    "mlops-test" { Start-DockerMlopsTest }
     "shell"     { Start-DockerShell }
     "status"    { Show-DockerStatus }
     "clean"     { Start-DockerClean }

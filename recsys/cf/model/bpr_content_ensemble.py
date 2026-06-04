@@ -177,6 +177,79 @@ class ContentScorer:
         similarities = embeddings @ user_profile
         
         return similarities
+
+    def _build_user_attribute_profile(self, user_items: Set[int]) -> Dict[str, Set[Any]]:
+        """Aggregate attributes from a user's history once per scoring call."""
+        user_attrs: Dict[str, Set[Any]] = {}
+        if not self.item_attributes:
+            return user_attrs
+
+        for u_item in user_items:
+            if u_item in self.item_attributes:
+                for key, value in self.item_attributes[u_item].items():
+                    if key not in user_attrs:
+                        user_attrs[key] = set()
+                    if isinstance(value, (list, set)):
+                        user_attrs[key].update(value)
+                    else:
+                        user_attrs[key].add(value)
+
+        return user_attrs
+
+    def _compute_attribute_score_from_profile(
+        self,
+        user_attrs: Dict[str, Set[Any]],
+        item_idx: int
+    ) -> float:
+        """Score one item against a precomputed user attribute profile."""
+        if not self.item_attributes or item_idx not in self.item_attributes:
+            return 0.5
+
+        if not user_attrs:
+            return 0.5
+
+        item_attrs = self.item_attributes[item_idx]
+        matches = 0
+        total = 0
+
+        for key, user_values in user_attrs.items():
+            if key in item_attrs:
+                item_value = item_attrs[key]
+                if isinstance(item_value, (list, set)):
+                    if any(v in user_values for v in item_value):
+                        matches += 1
+                else:
+                    if item_value in user_values:
+                        matches += 1
+                total += 1
+
+        return matches / total if total > 0 else 0.5
+
+    def _build_user_brand_profile(self, user_items: Set[int]) -> Set[str]:
+        """Aggregate brands from a user's history once per scoring call."""
+        if not self.item_brands:
+            return set()
+
+        return {
+            self.item_brands[u_item]
+            for u_item in user_items
+            if u_item in self.item_brands
+        }
+
+    def _compute_brand_score_from_profile(
+        self,
+        user_brands: Set[str],
+        item_idx: int
+    ) -> float:
+        """Score one item against a precomputed user brand profile."""
+        if not self.item_brands or item_idx not in self.item_brands:
+            return 0.5
+
+        if not user_brands:
+            return 0.5
+
+        item_brand = self.item_brands[item_idx]
+        return 1.0 if item_brand in user_brands else 0.3
     
     def compute_attribute_score(
         self,
@@ -196,42 +269,8 @@ class ContentScorer:
         Returns:
             Attribute match score [0, 1]
         """
-        if not self.item_attributes or item_idx not in self.item_attributes:
-            return 0.5  # Neutral score
-        
-        item_attrs = self.item_attributes[item_idx]
-        
-        # Collect user's preferred attributes
-        user_attrs: Dict[str, Set] = {}
-        for u_item in user_items:
-            if u_item in self.item_attributes:
-                for key, value in self.item_attributes[u_item].items():
-                    if key not in user_attrs:
-                        user_attrs[key] = set()
-                    if isinstance(value, (list, set)):
-                        user_attrs[key].update(value)
-                    else:
-                        user_attrs[key].add(value)
-        
-        if not user_attrs:
-            return 0.5
-        
-        # Compute overlap
-        matches = 0
-        total = 0
-        
-        for key, user_values in user_attrs.items():
-            if key in item_attrs:
-                item_value = item_attrs[key]
-                if isinstance(item_value, (list, set)):
-                    if any(v in user_values for v in item_value):
-                        matches += 1
-                else:
-                    if item_value in user_values:
-                        matches += 1
-                total += 1
-        
-        return matches / total if total > 0 else 0.5
+        user_attrs = self._build_user_attribute_profile(user_items)
+        return self._compute_attribute_score_from_profile(user_attrs, int(item_idx))
     
     def compute_brand_score(
         self,
@@ -248,21 +287,8 @@ class ContentScorer:
         Returns:
             Brand score [0, 1]
         """
-        if not self.item_brands or item_idx not in self.item_brands:
-            return 0.5
-        
-        item_brand = self.item_brands[item_idx]
-        
-        # Get user's preferred brands
-        user_brands = set()
-        for u_item in user_items:
-            if u_item in self.item_brands:
-                user_brands.add(self.item_brands[u_item])
-        
-        if not user_brands:
-            return 0.5
-        
-        return 1.0 if item_brand in user_brands else 0.3
+        user_brands = self._build_user_brand_profile(user_items)
+        return self._compute_brand_score_from_profile(user_brands, int(item_idx))
     
     def score_items(
         self,
@@ -292,14 +318,33 @@ class ContentScorer:
         
         # Add attribute and brand scores if available
         if self.item_attributes or self.item_brands:
-            items_to_score = candidate_items if candidate_items is not None else np.arange(self.num_items)
-            
-            for i, item_idx in enumerate(items_to_score):
-                attr_score = self.compute_attribute_score(user_items, item_idx)
-                brand_score = self.compute_brand_score(user_items, item_idx)
-                
-                scores[i] += self.attribute_weight * attr_score
-                scores[i] += self.brand_weight * brand_score
+            items_to_score = (
+                np.asarray(candidate_items)
+                if candidate_items is not None
+                else np.arange(self.num_items)
+            )
+            user_attrs = self._build_user_attribute_profile(user_items)
+            user_brands = self._build_user_brand_profile(user_items)
+
+            attr_scores = np.fromiter(
+                (
+                    self._compute_attribute_score_from_profile(user_attrs, int(item_idx))
+                    for item_idx in items_to_score
+                ),
+                dtype=np.float32,
+                count=len(items_to_score)
+            )
+            brand_scores = np.fromiter(
+                (
+                    self._compute_brand_score_from_profile(user_brands, int(item_idx))
+                    for item_idx in items_to_score
+                ),
+                dtype=np.float32,
+                count=len(items_to_score)
+            )
+
+            scores = scores + self.attribute_weight * attr_scores
+            scores = scores + self.brand_weight * brand_scores
         
         return scores
 
@@ -790,7 +835,7 @@ class BPRContentEnsemble:
                 
                 # Recall@K
                 hits = len(rec_items & test_items)
-                recall = hits / min(k, len(test_items))
+                recall = hits / len(test_items)
                 recalls.append(recall)
                 
                 # NDCG@K

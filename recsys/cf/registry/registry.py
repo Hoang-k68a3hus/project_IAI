@@ -25,6 +25,13 @@ import shutil
 import logging
 import subprocess
 
+from recsys.cf.contracts import (
+    atomic_write_json,
+    create_empty_registry as create_contract_empty_registry,
+    get_current_best_model_id,
+    normalize_registry,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -52,27 +59,16 @@ MODEL_STATUS = {
 
 def create_empty_registry() -> Dict[str, Any]:
     """Create empty registry structure."""
-    return {
-        'current_best': None,
-        'models': {},
-        'bert_embeddings': {},
-        'metadata': {
-            'registry_version': '1.1',
-            'last_updated': datetime.now().isoformat(),
-            'num_models': 0,
-            'num_embeddings': 0,
-            'selection_criteria': 'ndcg@10'
-        }
-    }
+    return create_contract_empty_registry()
 
 
 def validate_registry_schema(registry: Dict) -> bool:
     """Validate registry structure."""
-    required_keys = ['current_best', 'models', 'metadata']
-    for key in required_keys:
-        if key not in registry:
-            return False
-    return True
+    try:
+        normalized = normalize_registry(registry)
+    except Exception:
+        return False
+    return all(key in normalized for key in ['current_best', 'models', 'metadata'])
 
 
 # ============================================================================
@@ -130,7 +126,7 @@ class ModelRegistry:
     def _load_registry(self) -> Dict:
         """Load registry from JSON file."""
         with open(self.registry_path, 'r', encoding='utf-8') as f:
-            registry = json.load(f)
+            registry = normalize_registry(json.load(f))
         
         if not validate_registry_schema(registry):
             raise ValueError("Invalid registry schema")
@@ -139,10 +135,10 @@ class ModelRegistry:
     
     def _save_registry(self) -> None:
         """Save registry to JSON file."""
+        self._registry = normalize_registry(self._registry)
         self._registry['metadata']['last_updated'] = datetime.now().isoformat()
-        
-        with open(self.registry_path, 'w', encoding='utf-8') as f:
-            json.dump(self._registry, f, indent=2, ensure_ascii=False)
+        self._registry['metadata']['num_models'] = len(self._registry.get('models', {}))
+        atomic_write_json(self.registry_path, self._registry)
     
     def _audit_log(self, action: str, model_id: str, details: str = "") -> None:
         """Write entry to audit log."""
@@ -345,13 +341,11 @@ class ModelRegistry:
         best_id, best_value, best_model = candidates[0]
         
         # Get previous best for comparison
-        prev_best = self._registry.get('current_best')
         prev_value = None
-        if prev_best and isinstance(prev_best, dict):
-            prev_model_id = prev_best.get('model_id')
-            if prev_model_id:
-                prev_model = self._registry['models'].get(prev_model_id, {})
-                prev_value = prev_model.get('metrics', {}).get(metric)
+        prev_model_id = get_current_best_model_id(self._registry)
+        if prev_model_id:
+            prev_model = self._registry['models'].get(prev_model_id, {})
+            prev_value = prev_model.get('metrics', {}).get(metric)
         
         # Update current_best
         self._registry['current_best'] = {
@@ -395,7 +389,9 @@ class ModelRegistry:
         if not best:
             return None
         
-        model_id = best['model_id']
+        model_id = get_current_best_model_id(self._registry)
+        if not model_id:
+            return None
         return {
             'model_id': model_id,
             'model_info': self._registry['models'].get(model_id),
@@ -519,8 +515,8 @@ class ModelRegistry:
             raise KeyError(f"Model not found: {model_id}")
         
         # Check if it's current best
-        current_best = self._registry.get('current_best')
-        if current_best and isinstance(current_best, dict) and current_best.get('model_id') == model_id:
+        current_best_id = get_current_best_model_id(self._registry)
+        if current_best_id == model_id:
             logger.warning(f"Cannot archive current best model: {model_id}")
             return False
         
@@ -552,8 +548,8 @@ class ModelRegistry:
             raise KeyError(f"Model not found: {model_id}")
         
         # Check if it's current best
-        current_best = self._registry.get('current_best')
-        if current_best and isinstance(current_best, dict) and current_best.get('model_id') == model_id:
+        current_best_id = get_current_best_model_id(self._registry)
+        if current_best_id == model_id:
             raise ValueError(f"Cannot delete current best model: {model_id}")
         
         model = self._registry['models'][model_id]
@@ -606,10 +602,7 @@ class ModelRegistry:
         models = self._registry['models']
         
         # Handle current_best safely (can be None)
-        current_best = self._registry.get('current_best')
-        current_best_id = None
-        if current_best and isinstance(current_best, dict):
-            current_best_id = current_best.get('model_id')
+        current_best_id = get_current_best_model_id(self._registry)
         
         stats = {
             'total_models': len(models),

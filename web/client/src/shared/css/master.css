@@ -1,0 +1,232 @@
+@import url("https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@300;400;500;600;700&display=swap");
+
+:root {
+  --PRIMARY: #d83f72;
+  --PRIMARY_DARK: #a82455;
+  --PRIMARY_LIGHT: #fff0f5;
+  --PRIMARY_ALPHA_50: rgba(216, 63, 114, 0.5);
+  --PRIMARY_ALPHA_20: rgba(216, 63, 114, 0.2);
+  --ACCENT: #0f9f7a;
+  --ACCENT_DARK: #08745b;
+  --ACCENT_LIGHT: #e9f8f4;
+  --WARNING: #c97a14;
+  --WARNING_LIGHT: #fff5df;
+
+  --NEUTRAL_0: #ffffff;
+  --NEUTRAL_1: #f7f6f4;
+  --NEUTRAL_2: #e7e2dc;
+  --NEUTRAL_3: #c9c1b8;
+  --NEUTRAL_4: #867f78;
+  --NEUTRAL_5: #67605a;
+  --NEUTRAL_7: #312e2a;
+  --NEUTRAL_8: #24211f;
+  --NEUTRAL_9: #151311;
+
+  --SURFACE: #ffffff;
+  --SURFACE_SOFT: #fbfaf8;
+  --BORDER: #e8e1da;
+  --SHADOW_SOFT: 0 12px 30px rgba(36, 33, 31, 0.08);
+  --SHADOW_HOVER: 0 18px 42px rgba(36, 33, 31, 0.12);
+}
+
+::-webkit-scrollbar {
+  width: 7px;
+  height: 7px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--NEUTRAL_1);
+}
+
+::-webkit-scrollbar-thumb {
+  background: #b8ada4;
+  border-radius: 999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--NEUTRAL_4);
+}
+
+*, *:before, *:after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+  font-size: 1rem;
+  font-weight: 400;
+  font-family: "Be Vietnam Pro", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  letter-spacing: 0;
+}
+
+body {
+  background: var(--SURFACE_SOFT);
+  color: var(--NEUTRAL_8);
+}
+
+* > span {
+  font-size: inherit;
+  font-weight: inherit;
+}
+
+p, div, a {
+  line-height: 1.5rem;
+}
+
+a {
+  text-decoration: none;
+  color: inherit;
+}
+
+h1 {
+  font-size: 1.5rem;
+  font-weight: 700;
+}
+
+h2, .heading2 > * {
+  font-size: 1.1rem;
+  font-weight: 600;
+}
+
+section {
+  margin: 2rem 0;
+}
+
+.heading, .heading2 {
+  position: relative;
+  cursor: default;
+  user-select: none;
+}
+
+.heading {
+  text-align: center;
+  align-self: center;
+  color: var(--NEUTRAL_8);
+}
+
+.heading2 {
+  display: inline-block;
+  padding-left: 1.25rem;
+  color: var(--NEUTRAL_8);
+}
+
+.heading-wrapper {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 2.5rem 0 1.5rem;
+}
+
+.heading:before {
+  content: "";
+  position: absolute;
+  left: 50%;
+  bottom: -0.6rem;
+  width: 4rem;
+  height: 3px;
+  background: linear-gradient(90deg, var(--PRIMARY), var(--ACCENT));
+  border-radius: 999px;
+  transform: translateX(-50%);
+}
+
+.heading2:before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: calc(50% - 0.35rem);
+  width: 0.5rem;
+  height: 0.7rem;
+  border-radius: 2px;
+  background: var(--ACCENT);
+}
+
+img {
+  width: 100%;
+  height: 100%;
+}
+
+.btn1,
+.btn2 {
+  min-height: 2.75rem;
+  border-radius: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.45rem;
+  cursor: pointer;
+  text-align: center;
+  font-weight: 700;
+  border: 1px solid transparent;
+  transition: transform 0.2s ease, box-shadow 0.2s ease, background 0.2s ease, color 0.2s ease;
+}
+
+.btn1 {
+  color: white;
+  background: linear-gradient(135deg, var(--PRIMARY), var(--PRIMARY_DARK));
+  padding: 0.75rem 1.25rem;
+  min-width: 9rem;
+  box-shadow: 0 10px 24px rgba(216, 63, 114, 0.25);
+}
+
+.btn1:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 14px 30px rgba(216, 63, 114, 0.32);
+}
+
+.btn1:active,
+.btn2:active {
+  transform: translateY(0);
+}
+
+.btn2 {
+  color: var(--PRIMARY_DARK);
+  border-color: var(--PRIMARY_ALPHA_20);
+  padding: 0.7rem 1.1rem;
+  min-width: 9rem;
+  background: var(--SURFACE);
+}
+
+.btn2:hover {
+  color: white;
+  background: var(--PRIMARY);
+  border-color: var(--PRIMARY);
+  box-shadow: var(--SHADOW_SOFT);
+}
+
+.material-symbols-outlined {
+  user-select: none;
+  font-variation-settings: "FILL" 0, "wght" 600, "GRAD" 0, "opsz" 32;
+}
+
+input, select, option {
+  font-size: 0.9rem;
+  padding: 0.65rem 0.85rem;
+  border-radius: 8px;
+  border: 1px solid var(--BORDER);
+  background: var(--SURFACE);
+  color: var(--NEUTRAL_8);
+  outline: none;
+}
+
+input:focus-visible,
+select:focus-visible {
+  border-color: var(--ACCENT);
+  box-shadow: 0 0 0 3px rgba(15, 159, 122, 0.14);
+}
+
+button {
+  border: none;
+  font-family: inherit;
+}
+
+.warning-box {
+  background: var(--WARNING_LIGHT);
+  padding: 0.75rem 1rem;
+  border: 1px solid rgba(201, 122, 20, 0.35);
+  border-radius: 8px;
+  font-size: 0.9rem;
+  line-height: 1.35rem;
+}
+
+.warning-box .warning {
+  font-weight: 700;
+  color: var(--WARNING);
+}

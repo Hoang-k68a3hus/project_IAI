@@ -57,7 +57,7 @@ ENV PYTHONUNBUFFERED=1 \
     ENV=production
 
 # Create directories
-RUN mkdir -p /app/logs /app/data /app/artifacts /app/config
+RUN mkdir -p /app/logs /app/data /app/artifacts /app/config /app/reports /app/checkpoints
 
 # Copy application code
 COPY recsys/ /app/recsys/

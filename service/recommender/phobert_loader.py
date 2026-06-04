@@ -144,7 +144,11 @@ class PhoBERTEmbeddingLoader:
         # Load PyTorch file
         try:
             import torch
-            bert_data = torch.load(resolved_path, map_location='cpu')
+            bert_data = torch.load(
+                resolved_path,
+                map_location='cpu',
+                weights_only=True,
+            )
         except ImportError:
             logger.error("PyTorch not available, cannot load embeddings")
             raise

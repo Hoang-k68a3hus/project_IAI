@@ -20,6 +20,22 @@ import numpy as np
 logger = logging.getLogger(__name__)
 
 
+def merge_user_exclusion_sets(
+    user_pos_sets: Dict[int, Set[int]],
+    *extra_sets: Optional[Dict[int, Set[int]]]
+) -> Dict[int, Set[int]]:
+    """Merge train positives with optional holdout positives for negative exclusion."""
+    merged = {int(user_idx): set(items) for user_idx, items in user_pos_sets.items()}
+
+    for extra in extra_sets:
+        if extra is None:
+            continue
+        for user_idx, items in extra.items():
+            merged.setdefault(int(user_idx), set()).update(items)
+
+    return merged
+
+
 class HardNegativeMixer:
     """
     Mix hard and random negatives for BPR training.
@@ -86,7 +102,7 @@ class HardNegativeMixer:
         
         Args:
             user_idx: User index
-            positive_set: Set of positive item indices to exclude
+            positive_set: Set of item indices to exclude from negatives
             num_items: Total number of items
             use_hard: Override random selection (True=force hard, False=force random)
             max_attempts: Maximum sampling attempts before raising error
@@ -133,7 +149,8 @@ class HardNegativeMixer:
         user_indices: np.ndarray,
         user_pos_sets: Dict[int, Set[int]],
         num_items: int,
-        batch_size: Optional[int] = None
+        batch_size: Optional[int] = None,
+        user_exclusion_sets: Optional[Dict[int, Set[int]]] = None
     ) -> np.ndarray:
         """
         Sample negative items for a batch of users.
@@ -143,6 +160,9 @@ class HardNegativeMixer:
             user_pos_sets: Dict mapping u_idx -> Set of positive items
             num_items: Total number of items
             batch_size: Process in chunks (memory optimization)
+            user_exclusion_sets: Optional full item sets to exclude per user.
+                Use this to include validation/test positives and prevent
+                holdout positives from being sampled as negatives.
         
         Returns:
             Array of sampled negative item indices
@@ -155,7 +175,11 @@ class HardNegativeMixer:
         
         for i, user_idx in enumerate(user_indices):
             user_idx = int(user_idx)
-            pos_set = user_pos_sets.get(user_idx, set())
+            pos_set = (
+                user_exclusion_sets.get(user_idx, set())
+                if user_exclusion_sets is not None
+                else user_pos_sets.get(user_idx, set())
+            )
             negatives[i] = self.sample_negative(
                 user_idx=user_idx,
                 positive_set=pos_set,
@@ -207,6 +231,7 @@ class TripletSampler:
         user_pos_sets: Dict[int, Set[int]],
         num_items: int,
         hard_neg_sets: Optional[Dict[int, Set[int]]] = None,
+        user_exclusion_sets: Optional[Dict[int, Set[int]]] = None,
         hard_ratio: float = 0.3,
         samples_per_positive: int = 5,
         random_seed: int = 42
@@ -219,6 +244,9 @@ class TripletSampler:
             user_pos_sets: Dict mapping u_idx -> Set of positive items
             num_items: Total number of items
             hard_neg_sets: Optional hard negative sets
+            user_exclusion_sets: Optional full item sets to exclude per user
+                while sampling negatives. Include train + validation/test
+                positives here to avoid sampling holdout positives as negatives.
             hard_ratio: Fraction of hard negatives (default: 0.3)
             samples_per_positive: Multiplier for samples per epoch
             random_seed: Random seed
@@ -235,6 +263,10 @@ class TripletSampler:
         """
         self.positive_pairs = positive_pairs
         self.user_pos_sets = user_pos_sets
+        self.user_exclusion_sets = self._merge_exclusion_sets(
+            user_pos_sets,
+            user_exclusion_sets
+        )
         self.num_items = num_items
         self.samples_per_positive = samples_per_positive
         self.rng = np.random.default_rng(random_seed)
@@ -255,6 +287,16 @@ class TripletSampler:
         logger.info(f"  Samples per epoch: {self.samples_per_epoch:,}")
         logger.info(f"  Items: {num_items:,}")
         logger.info(f"  Hard ratio: {hard_ratio:.1%}")
+        if user_exclusion_sets is not None:
+            logger.info("  Negative exclusions: train positives + supplied holdout positives")
+
+    @staticmethod
+    def _merge_exclusion_sets(
+        user_pos_sets: Dict[int, Set[int]],
+        user_exclusion_sets: Optional[Dict[int, Set[int]]]
+    ) -> Dict[int, Set[int]]:
+        """Ensure train positives are always excluded, plus any supplied holdouts."""
+        return merge_user_exclusion_sets(user_pos_sets, user_exclusion_sets)
     
     def sample_epoch(self, shuffle: bool = True) -> np.ndarray:
         """
@@ -281,7 +323,8 @@ class TripletSampler:
         negatives = self.mixer.sample_negatives_batch(
             user_indices=users,
             user_pos_sets=self.user_pos_sets,
-            num_items=self.num_items
+            num_items=self.num_items,
+            user_exclusion_sets=self.user_exclusion_sets
         )
         
         # Stack triplets
@@ -318,7 +361,8 @@ class TripletSampler:
         negatives = self.mixer.sample_negatives_batch(
             user_indices=users,
             user_pos_sets=self.user_pos_sets,
-            num_items=self.num_items
+            num_items=self.num_items,
+            user_exclusion_sets=self.user_exclusion_sets
         )
         
         return np.column_stack([users, positives, negatives])
@@ -349,6 +393,7 @@ def sample_triplets(
     num_items: int,
     num_samples: int,
     hard_neg_sets: Optional[Dict[int, Set[int]]] = None,
+    user_exclusion_sets: Optional[Dict[int, Set[int]]] = None,
     hard_ratio: float = 0.3,
     random_seed: int = 42
 ) -> np.ndarray:
@@ -361,6 +406,7 @@ def sample_triplets(
         num_items: Total number of items
         num_samples: Number of triplets to sample
         hard_neg_sets: Optional hard negative sets
+        user_exclusion_sets: Optional full item sets to exclude per user
         hard_ratio: Fraction of hard negatives
         random_seed: Random seed
     
@@ -381,6 +427,7 @@ def sample_triplets(
         user_pos_sets=user_pos_sets,
         num_items=num_items,
         hard_neg_sets=hard_neg_sets,
+        user_exclusion_sets=user_exclusion_sets,
         hard_ratio=hard_ratio,
         samples_per_positive=1,  # Will sample exactly num_samples
         random_seed=random_seed

@@ -29,6 +29,13 @@ from scripts.utils import (  # type: ignore
     get_git_commit,
 )
 
+from recsys.cf.contracts import (
+    MODEL_STATUS_ACTIVE,
+    atomic_write_json,
+    get_current_best_model_id,
+    normalize_registry,
+)
+
 
 # =============================================================================
 # Configuration
@@ -55,59 +62,27 @@ def load_registry() -> Dict[str, Any]:
         raise FileNotFoundError(f"Registry not found at {registry_path}")
 
     with open(registry_path, "r") as f:
-        return json.load(f)
+        return normalize_registry(json.load(f))
 
 
 def get_model_info(model_id: str, registry: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """Get model info from registry."""
-    models_data = registry.get("models", {})
-
-    # Handle dict format (new)
-    if isinstance(models_data, dict):
-        model = models_data.get(model_id)
-        if model:
-            model["model_id"] = model_id
-            return model
-    else:
-        # Handle list format (old)
-        for model in models_data:
-            if model.get("model_id") == model_id:
-                return model
-    return None
+    return registry.get("models", {}).get(model_id)
 
 
 def get_previous_model(registry: Dict[str, Any]) -> Optional[str]:
     """Get the previous active model for rollback."""
     models_data = registry.get("models", {})
+    current_best = get_current_best_model_id(registry)
 
-    # Get current best
-    current_best_data = registry.get("current_best")
-    if isinstance(current_best_data, dict):
-        current_best = current_best_data.get("model_id")
-    else:
-        current_best = current_best_data
-
-    # Handle dict format (new)
-    if isinstance(models_data, dict):
-        # Sort by created_at descending
-        sorted_models = sorted(
-            models_data.items(),
-            key=lambda x: x[1].get("created_at", ""),
-            reverse=True,
-        )
-        for model_id, model_info in sorted_models:
-            if model_id != current_best:
-                return model_id
-    else:
-        # Handle list format (old)
-        sorted_models = sorted(
-            models_data,
-            key=lambda m: m.get("registered_at", ""),
-            reverse=True,
-        )
-        for model in sorted_models:
-            if model["model_id"] != current_best:
-                return model["model_id"]
+    sorted_models = sorted(
+        models_data.items(),
+        key=lambda x: x[1].get("created_at", ""),
+        reverse=True,
+    )
+    for model_id, _model_info in sorted_models:
+        if model_id != current_best:
+            return model_id
 
     return None
 
@@ -207,22 +182,29 @@ def update_registry_active_status(
     registry_path = DEPLOY_CONFIG["registry_path"]
 
     with open(registry_path, "r") as f:
-        registry = json.load(f)
+        registry = normalize_registry(json.load(f))
 
     # Update active status
     models_data = registry.get("models", {})
+    if model_id not in models_data:
+        raise ValueError(f"Model not found in registry: {model_id}")
 
-    if isinstance(models_data, dict):
-        for mid, model in models_data.items():
-            model["is_active"] = mid == model_id
-    else:
-        for model in models_data:
-            model["is_active"] = model.get("model_id") == model_id
+    for mid, model in models_data.items():
+        model["is_active"] = mid == model_id
+        if mid == model_id and model.get("status") != MODEL_STATUS_ACTIVE:
+            model["status"] = MODEL_STATUS_ACTIVE
 
-    registry["current_best"] = model_id
-
-    with open(registry_path, "w") as f:
-        json.dump(registry, f, indent=2)
+    selected = models_data[model_id]
+    registry["current_best"] = {
+        "model_id": model_id,
+        "model_type": selected.get("model_type"),
+        "version": selected.get("version"),
+        "path": selected.get("path"),
+        "selected_at": datetime.now().isoformat(),
+        "selected_by": "automation.model_deployment",
+    }
+    registry = normalize_registry(registry)
+    atomic_write_json(registry_path, registry)
 
     logger.info("Registry updated: %s is now active", model_id)
 
@@ -322,11 +304,7 @@ def deploy_model(
                     raise ValueError("No previous model available for rollback")
                 logger.info("Rollback mode: deploying previous model %s", model_id)
             elif not model_id:
-                current_best_data = registry.get("current_best")
-                if isinstance(current_best_data, dict):
-                    model_id = current_best_data.get("model_id")
-                else:
-                    model_id = current_best_data
+                model_id = get_current_best_model_id(registry)
                 if not model_id:
                     raise ValueError("No current_best model in registry")
                 logger.info("Deploying current_best: %s", model_id)
